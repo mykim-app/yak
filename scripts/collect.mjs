@@ -89,29 +89,73 @@ const clean = (t) => unesc(String(t || '').replace(/<[^>]+>/g, ' ')).replace(/\s
 const cdata = (xml) => [...String(xml || '').matchAll(/<!\[CDATA\[([\s\S]*?)\]\]>/g)].map((m) => clean(m[1])).filter(Boolean);
 const articles = (xml) => [...String(xml || '').matchAll(/<ARTICLE title="([^"]*)"[^>]*>([\s\S]*?)<\/ARTICLE>/g)]
   .map((m) => ({ title: clean(m[1]), paras: cdata(m[2]) }));
+const squash = (t) => String(t || '').replace(/\s+/g, ' ').trim();
 function shorten(t, n) {
-  t = clean(t);
+  t = squash(t);
   if (t.length <= n) return t;
   const cut = t.slice(0, n);
   const at = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('다.'), cut.lastIndexOf(', '));
   return (at > n * 0.5 ? cut.slice(0, at + 1) : cut).trim() + '…';
 }
+// ── 짧게 줄이기 ──
+// 임상시험 설명·통계 문장은 부작용 목록이 아니므로 뺀다.
+const META = /임상\s*시험|명의?\s*환자|환자(의|들|에게|에서)|\bn\s*=|투여하였|투여 ?받|위약|대조군|발생률|발생빈도|빈도의 정의|시판\s*후|조사|분석|평가|인과관계|보고되었|관찰되었|나타내었|%/;
+const FREQ = /^(매우\s*드물게|매우\s*흔하게|드물게|때때로|자주|흔하게|흔히|간혹|가끔|빈도\s*불명)\s*[:：]?\s*/;
+function listItems(txt) {
+  return String(txt).replace(/\([^)]*\)|\[[^\]]*\]/g, '').split(/[,，、ㆍ]|\s및\s|\s또는\s|\s(?=(?:매우\s*)?(?:드물게|때때로|자주|흔하게|간혹)\s)/)
+    .map((x) => x.trim().replace(FREQ, '').replace(/\s*등(의|이|과|을)?(\s.*)?$/, '').replace(/\s*이\s*(나타날|있을|보고).*$/, '').replace(/[.。\-–\s]+$/, '').trim())
+    .filter((x) => x && x !== '매우' && x.length <= 14 && !/[:：;]/.test(x) && !META.test(x) && !/[0-9]{2,}/.test(x) && !/(며|고|다|음|함|됨|것)$/.test(x));
+}
+function uniq(a) { return [...new Set(a)]; }
+// 부작용 문단들 → "소화기계: 구역, 설사 / 신경계: 두통" 또는 "흔한 부작용: …"
+function summarizeSE(paras) {
+  const text = squash(paras.join(' '));
+  if (!text) return '';
+  const common = text.match(/(?:가장\s*)?흔(?:한|하게\s*(?:보고된|나타난|발생한))\s*이상반응\s*(?:\([^)]*\)\s*)?(?:은|으로는|으로)\s*([^.]{4,220}?)(?:이었다|였다|이다|이었으며|였으며|으로|등)/);
+  if (common) { const it = uniq(listItems(common[1])); if (it.length >= 2) return `흔한 부작용: ${it.slice(0, 6).join(', ')}`; }
+  const groups = [];
+  for (const seg of text.split(/\s(?=\d+\)\s)|\s(?=\(\d+\)\s)|\s(?=[•·]\s)|\s(?=(?:[가-힣·]{1,10}계|피부|전신|눈|귀|과민증|감염)\s*[:：])/)) {
+    const m = seg.replace(/^(\d+\)|\(\d+\)|[•·])\s*/, '').match(/^([가-힣·\s]{1,12}?)\s*[:：]\s*(.+)$/);
+    if (!m) continue;
+    const label = m[1].trim();
+    if (!/(계|피부|전신|눈|귀|기타|과민증|감각기|감염)$/.test(label) || META.test(label)) continue;
+    const it = uniq(listItems(m[2])).slice(0, 4);
+    if (it.length) groups.push(`${label}: ${it.join(', ')}`);
+    if (groups.length >= 4) break;
+  }
+  if (groups.length) return groups.join(' / ');
+  // "…에서 일어난 다른 이상반응 : 관절통, 천식, …" 형태
+  const other = [...text.matchAll(/이상반응\s*[:：]\s*([^:：]{4,200})/g)].flatMap((m) => listItems(m[1]));
+  if (other.length >= 2) return `보고된 부작용: ${uniq(other).slice(0, 7).join(', ')}`;
+  // 마지막 수단: 증상이 쉼표로 나열된 짧은 문장
+  const sent = text.split(/(?<=다\.)\s+/).find((x) => !META.test(x) && x.length <= 160 && (x.match(/,/g) || []).length >= 2 && !/할 것|주의/.test(x));
+  return sent || '';
+}
+// e약은요 문장: "…, …, … 등이 나타나는 경우 복용을 즉각 중지…" → 증상만
+function summarizeEasySE(t) {
+  t = squash(t);
+  const m = t.match(/^(.*?)(?:\s*등(?:의)?\s*(?:이|의\s*증상이)?\s*(?:나타나|나타날|생길|있을)|이\s*나타나는\s*경우)/);
+  if (m) { const it = uniq(listItems(m[1])); if (it.length) return it.slice(0, 7).join(', ') + (it.length > 7 ? ' 등' : ''); }
+  return shorten(t, 130);
+}
+const cleanEff = (t) => {
+  t = squash(t).replace(/^[\s:：○●·•￮\-–]+/, '').replace(/\s[:：]\s/g, ' ').replace(/\s[￮○●•]\s?/g, ' ');
+  const first = t.match(/^(.{8,140}?[^0-9]\.)\s/); // 첫 문장이 짧으면 그것만
+  return first ? first[1] : shorten(t, 140);
+};
+
 // 허가사항 문서에서 효능과 주요 부작용을 짧게 뽑는다.
 function fromPermitDoc(it) {
-  const eff = shorten(cdata(it.EE_DOC_DATA).join(' '), 200);
+  const eff = cleanEff(cdata(it.EE_DOC_DATA).join(' '));
   const arts = articles(it.NB_DOC_DATA);
   let se = '';
   const adverse = arts.find((a) => /이상반응|부작용/.test(a.title));
-  if (adverse) {
-    const listed = adverse.paras.filter((x) => /[가-힣]+계\s*[:：]|피부\s*[:：]|과민증/.test(x));
-    se = (listed.length ? listed : adverse.paras).join(' ');
-  } else {
+  if (adverse) se = summarizeSE(adverse.paras);
+  if (!se) {
     const stop = arts.find((a) => /(즉각|즉시)[^.]*중지/.test(a.title));
-    if (stop) se = stop.paras.join(' ');
+    if (stop) se = summarizeSE(stop.paras);
   }
-  // 빈도 표의 머리글(흔하게 (≥ 1/100 …) 등)은 뺀다.
-  se = se.replace(/(매우\s*)?(흔하게|흔하지\s*않게|드물게|빈도\s*불명)\s*\([^)]*\)/g, ' ').replace(/^\s*기관계\s*/, '');
-  return [eff, shorten(se, 240)];
+  return [eff, shorten(se, 150)];
 }
 // 조합 번호 → 조각 파일 번호 (화면에서 같은 계산을 한다)
 const SHARDS = 128;
@@ -162,7 +206,7 @@ async function main() {
     supplied = new Set(easy.map((it) => pick(it, 'itemSeq', 'ITEM_SEQ')).filter(Boolean));
     for (const it of easy) {
       const seq = pick(it, 'itemSeq', 'ITEM_SEQ');
-      if (seq) easyText.set(seq, [shorten(pick(it, 'efcyQesitm'), 200), shorten(pick(it, 'seQesitm'), 240)]);
+      if (seq) easyText.set(seq, [cleanEff(pick(it, 'efcyQesitm')), summarizeEasySE(pick(it, 'seQesitm'))]);
     }
   } catch (e) {
     console.warn(`e약은요 자료를 받지 못해 일반의약품 유통 여부는 표시하지 않습니다(${e.message}). 공공데이터포털에서 '식품의약품안전처_의약품개요정보(e약은요)'를 활용신청하면 적용됩니다.`);
