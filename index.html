@@ -39,6 +39,8 @@ h1{font-size:clamp(28px,5vw,40px);line-height:1.2;letter-spacing:-0.03em;font-we
 .suggest li button:hover,.suggest li button:focus-visible{background:var(--green-soft)}
 .suggest li button:focus-visible{outline:2px solid var(--green);outline-offset:-2px}
 .suggest .nm{font-weight:600}
+.suggest .left{display:flex;flex-direction:column;gap:2px;min-width:0}
+.suggest .cp{color:var(--muted);font-size:13px}
 .suggest .co{color:var(--muted);font-size:14px;white-space:nowrap}
 .more{color:var(--muted);font-size:14px;padding:10px 8px}
 
@@ -70,6 +72,8 @@ section.group{margin-top:40px}
 table{width:100%;border-collapse:collapse;font-size:15px}
 th{text-align:left;font-weight:600;color:var(--muted);font-size:13px;padding:10px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
 td{padding:10px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+td.diff{font-size:14px;color:var(--muted)}
+td.diff b{color:var(--ink);font-weight:600}
 td.date,td.kind{white-space:nowrap;color:var(--muted)}
 @media (max-width:620px){ th.kind,td.kind{display:none} }
 tr.me td{background:var(--capsule-soft)}
@@ -112,7 +116,7 @@ footer p{margin:0 0 6px}
   const qEl = $('#q'), statusEl = $('#status'), sugEl = $('#suggest'), resEl = $('#result');
   const UNIT = { '밀리그램':'mg', '밀리그람':'mg', '그램':'g', '마이크로그램':'µg', '밀리리터':'mL', '리터':'L', '킬로그램':'kg' };
   const KIND = ['', '전문의약품', '일반의약품'];
-  let D = null, norm = [], ingNorm = [], exact = new Map(), bySet = new Map();
+  let D = null, norm = [], ingNorm = [], exact = new Map(), bySet = new Map(), byIng = new Map();
 
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const n = (s) => String(s).toLowerCase().replace(/\s+/g, '');
@@ -140,8 +144,9 @@ footer p{margin:0 0 6px}
     }
     norm = D.p.map((p) => n(p[1]));
     ingNorm = D.ing.map((x) => n(x[1]));
-    exact = new Map(); bySet = new Map();
+    exact = new Map(); bySet = new Map(); byIng = new Map();
     D.c.forEach((key, i) => {
+      new Set(setKey(key).split(',')).forEach((g) => { if (!byIng.has(g)) byIng.set(g, []); byIng.get(g).push(i); });
       if (!exact.has(key)) exact.set(key, []); exact.get(key).push(i);
       const sk = setKey(key); if (!bySet.has(sk)) bySet.set(sk, []); bySet.get(sk).push(i);
     });
@@ -183,7 +188,9 @@ footer p{margin:0 0 6px}
     const LIMIT = 40;
     sugEl.innerHTML = hits.slice(0, LIMIT).map((i) => {
       const p = D.p[i];
-      return `<li><button type="button" data-i="${i}"><span class="nm">${esc(p[1])}</span><span class="co">${esc(p[2])}</span></button></li>`;
+      const ps = parts(D.c[i]);
+      const cp = ps.slice(0, 2).map((g) => `${g.name}${g.qty ? ' ' + g.qty + g.unit : ''}`).join(' + ') + (ps.length > 2 ? ` 외 ${ps.length - 2}종` : '');
+      return `<li><button type="button" data-i="${i}"><span class="left"><span class="nm">${esc(p[1])}</span><span class="cp">${esc(cp)}</span></span><span class="co">${esc(p[2])}</span></button></li>`;
     }).join('') + (hits.length > LIMIT ? `<li class="more">그 밖에 ${(hits.length - LIMIT).toLocaleString()}개가 더 있습니다. 함량이나 제형(예: 500, 정)을 함께 넣어 좁혀 보세요.</li>` : '');
   }
 
@@ -205,6 +212,27 @@ footer p{margin:0 0 6px}
     const firstIdx = same.find((x) => D.p[x][3]);
     const others = (bySet.get(setKey(key)) || []).filter((x) => D.c[x] !== key);
     const groups = new Map(); others.forEach((x) => { const k = D.c[x]; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(x); });
+    // 복합제: 주성분이 한 가지만 다르고 나머지는 같은 제품 (예: 같은 약초라도 추출 방법이 다른 원료)
+    const mySet = [...new Set(setKey(key).split(','))];
+    const similar = [];
+    if (mySet.length >= 2) {
+      const shared = new Map();
+      mySet.forEach((g) => (byIng.get(g) || []).forEach((x) => shared.set(x, (shared.get(x) || 0) + 1)));
+      shared.forEach((cnt, x) => {
+        if (x === i || setKey(D.c[x]) === setKey(key)) return;
+        const other = new Set(setKey(D.c[x]).split(','));
+        const missing = mySet.length - cnt, extra = other.size - cnt;
+        if (cnt >= 2 && missing <= 1 && extra <= 1) similar.push([x, cnt, missing, extra]);
+      });
+      similar.sort((a, b) => b[1] - a[1] || (a[2] + a[3]) - (b[2] + b[3]) || byDate(a[0], b[0]));
+    }
+    const diffText = (x) => {
+      const mine = new Set(mySet), theirs = new Set(setKey(D.c[x]).split(','));
+      const name = (g) => D.ing[+g][1];
+      const lack = mySet.filter((g) => !theirs.has(g)).map(name);
+      const plus = [...theirs].filter((g) => !mine.has(g)).map(name);
+      return [lack.length ? `없음: <b>${esc(lack.join(', '))}</b>` : '', plus.length ? `대신 들어감: <b>${esc(plus.join(', '))}</b>` : ''].filter(Boolean).join('<br>');
+    };
     const ingLine = ings.map((g) => `<div class="ing">${esc(g.name)} <span>${esc(g.qty ? g.qty + g.unit : '')}</span></div>`).join('');
 
     resEl.innerHTML = `
@@ -229,7 +257,14 @@ footer p{margin:0 0 6px}
         ${groups.size ? [...groups.entries()].sort((a, b) => b[1].length - a[1].length).map(([k, list]) =>
           `<details class="strength"><summary>${esc(strengthText(k))} <span>${list.length}개</span></summary>${tableHtml(rowsHtml(list.sort(byDate), -1, -1))}</details>`).join('')
           : '<div class="empty">함량만 다른 제품은 없습니다.</div>'}
-      </section>`;
+      </section>
+      ${mySet.length >= 2 ? `<section class="group">
+        <div class="ghead"><span class="n">${similar.length.toLocaleString()}</span><h2>주성분이 한 가지만 다른 제품</h2>
+          <p>여러 성분이 섞인 약(복합제)에서, 성분 하나만 빠지거나 다른 원료로 바뀐 제품입니다. 같은 약초라도 원료 규격이 다르면 여기에 나옵니다.</p></div>
+        ${similar.length ? `<div class="tbl"><table><thead><tr><th>제품명</th><th>회사</th><th>차이</th><th>허가일</th></tr></thead><tbody>${
+          similar.slice(0, 60).map(([x]) => { const q = D.p[x]; return `<tr><td><a class="prod" href="#seq=${esc(q[0])}">${esc(q[1])}</a></td><td>${esc(q[2])}</td><td class="diff">${diffText(x)}</td><td class="date">${fmtDate(q[3])}</td></tr>`; }).join('')
+        }</tbody></table></div>${similar.length > 60 ? `<div class="empty">그 밖에 ${similar.length - 60}개가 더 있습니다.</div>` : ''}` : '<div class="empty">해당하는 제품이 없습니다.</div>'}
+      </section>` : ''}`;
 
     const f = $('#f');
     if (f) f.addEventListener('input', () => {
