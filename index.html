@@ -67,6 +67,14 @@ h1{font-size:clamp(28px,5vw,40px);line-height:1.2;letter-spacing:-0.03em;font-we
 .tags{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
 .tag{font-size:13px;padding:2px 10px;border-radius:999px;border:1px solid var(--line);color:var(--muted);background:var(--card)}
 
+.info{margin-top:22px;display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.info .box{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px 18px}
+.info h3{margin:0 0 6px;font-size:15px;color:var(--green)}
+.info .box.se h3{color:var(--warn)}
+.info p{margin:0;font-size:15px;line-height:1.65}
+.info-src{grid-column:1/-1;color:var(--muted);font-size:13px;margin:0}
+.info-src a{color:var(--green)}
+@media (max-width:620px){ .info{grid-template-columns:1fr} }
 section.group{margin-top:40px}
 .ghead{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;border-bottom:2px solid var(--ink);padding-bottom:8px}
 .ghead .n{font-size:40px;font-weight:800;line-height:1;letter-spacing:-0.03em;color:var(--green)}
@@ -261,6 +269,29 @@ footer p{margin:0 0 6px}
   const byDate = (a, b) => (D.p[a][3] || '99999999').localeCompare(D.p[b][3] || '99999999');
   const tableHtml = (body) => `<div class="tbl"><table><thead><tr><th>제품명</th><th>회사</th><th class="kind">구분</th><th>허가일</th></tr></thead><tbody>${body}</tbody></table></div>`;
 
+  const SHARDS = 128;
+  const shardOf = (key) => { let h = 5381; for (const ch of key) h = ((h * 33) ^ ch.charCodeAt(0)) >>> 0; return h % SHARDS; };
+  const infoCache = new Map();
+  async function showInfo(i) {
+    const box = $('#info'); if (!box) return;
+    const key = D.c[i], n = shardOf(key), seq = D.p[i][0];
+    try {
+      if (!infoCache.has(n)) {
+        const r = await fetch(`data/info/${n}.json?v=${encodeURIComponent(D.updated)}`);
+        infoCache.set(n, r.ok ? await r.json() : {});
+      }
+    } catch { infoCache.set(n, {}); }
+    if ($('#info') !== box) return; // 그사이 다른 약을 고른 경우
+    const it = infoCache.get(n)[key];
+    const link = `<a href="https://nedrug.mfds.go.kr/pbp/CCBBB01/getItemDetail?itemSeq=${encodeURIComponent(seq)}" target="_blank" rel="noopener">의약품안전나라에서 전체 허가사항 보기</a>`;
+    if (!it) { box.innerHTML = `<p class="info-src">효능·부작용 요약 자료가 없습니다. ${link}</p>`; return; }
+    const [eff, se, src] = it;
+    box.innerHTML = `
+      <div class="box"><h3>효능</h3><p>${esc(eff || '요약 자료 없음')}</p></div>
+      <div class="box se"><h3>주요 부작용</h3><p>${esc(se || '요약 자료 없음')}</p></div>
+      <p class="info-src">${src === 1 ? '식약처 e약은요' : '식약처 허가사항'} 자료를 짧게 줄인 내용이며, 같은 성분·함량 제품의 자료를 함께 씁니다. ${link}</p>`;
+  }
+
   function showProduct(i) {
     const p = D.p[i], key = D.c[i];
     const ings = parts(key);
@@ -300,6 +331,7 @@ footer p{margin:0 0 6px}
           <div class="b" aria-label="주성분">${ingLine}</div>
         </div>
         <div class="tags">${p[4] ? `<span class="tag">${KIND[p[4]]}</span>` : ''}${p[3] ? `<span class="tag">허가 ${fmtDate(p[3])}</span>` : ''}<span class="tag">주성분 ${ings.length}종</span></div>
+        <div class="info" id="info" aria-live="polite"></div>
       </div>
 
       <section class="group">
@@ -332,6 +364,7 @@ footer p{margin:0 0 6px}
       resEl.querySelectorAll('section.group:first-of-type tbody tr').forEach((tr) => { tr.hidden = t && !tr.dataset.name.includes(t); });
     });
     document.title = `${p[1]} 성분·카피약`;
+    showInfo(i);
   }
 
   function route() {
