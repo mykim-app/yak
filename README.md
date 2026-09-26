@@ -11,15 +11,13 @@
 ## 처음 설정 순서
 
 1. **인증키 받기**: 공공데이터포털(data.go.kr)에서 `식품의약품안전처_의약품 제품 허가정보` 활용신청 → 개발계정은 자동 승인(하루 10,000회). 마이페이지에서 **일반 인증키(Decoding)** 를 복사합니다. 발급 직후에는 1~2시간 동안 "등록되지 않은 서비스키" 오류가 날 수 있습니다.
-2. **저장소 만들기**: GitHub에 새 공개 저장소(예: `mykim-app/drug-finder`)를 만들고 이 폴더의 파일을 모두 올립니다. `.github` 폴더가 빠지지 않게 주의합니다.
+2. **저장소 만들기**: GitHub에 새 공개 저장소(`mykim-app/yak`)를 만들고 이 폴더의 파일을 모두 올립니다. `.github` 폴더가 빠지지 않게 주의합니다.
 3. **인증키 등록**: 저장소 Settings → Secrets and variables → Actions → New repository secret
    - 이름: `DATA_GO_KR_KEY`
    - 값: 1번에서 복사한 인증키
-4. **자료 받기**: 사이트 화면의 **"지금 자료 받기"**(자료가 있을 때는 맨 아래 **"자료 갱신"**)를 누르고 GitHub 토큰을 넣으면 바로 실행됩니다. 진행 상황이 창에 표시되고, 끝나면 화면이 새 자료로 바뀝니다.
-   - 토큰 만드는 법: GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens → 이 저장소 하나만 선택 → Repository permissions의 **Actions: Read and write**. 토큰은 그 기기의 브라우저에만 저장됩니다.
-   - 사이트를 거치지 않으려면 Actions 탭 → "의약품 자료 갱신" → Run workflow. 10~20분 정도 걸립니다. 끝나면 `data/drugs.json`이 자동으로 올라옵니다.
+4. **자료 받기(처음 한 번)**: Actions 탭 → "의약품 자료 갱신" → Run workflow. 10~20분 정도 걸립니다. 끝나면 `data/drugs.json`이 자동으로 올라옵니다.
    - 실패하면서 권한 오류가 나오면 Settings → Actions → General → Workflow permissions를 "Read and write permissions"로 바꿉니다.
-5. **게시**: Settings → Pages → Source를 "Deploy from a branch", Branch를 `main` / `(root)`로 지정합니다. 주소는 `https://mykim-app.github.io/drug-finder/` 입니다.
+5. **게시**: Settings → Pages → Source를 "Deploy from a branch", Branch를 `main` / `(root)`로 지정합니다. 주소는 `https://mykim-app.github.io/yak/` 입니다.
 
 이후에는 매주 월요일 새벽 3시(한국시간)에 자동으로 갱신됩니다.
 
