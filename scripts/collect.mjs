@@ -6,6 +6,8 @@ import { writeFile, mkdir } from 'node:fs/promises';
 // 붙여 넣을 때 섞여 들어간 앞뒤 공백·줄바꿈을 없앤다.
 const KEY = (process.env.DATA_GO_KR_KEY || '').replace(/\s+/g, '');
 const BASE = process.env.API_BASE || 'https://apis.data.go.kr/1471000/DrugPrdtPrmsnInfoService08';
+// e약은요: 일반의약품 가운데 실제 공급 실적이 있는 제품 목록 (활용신청을 따로 해야 함, 없으면 건너뜀)
+const EASY_BASE = process.env.EASY_BASE || 'https://apis.data.go.kr/1471000/DrbEasyDrugInfoService';
 const ROWS = 100;          // 한 번에 받을 수 있는 최대 건수
 const PAUSE_MS = 150;      // 초당 호출 제한을 피하기 위한 간격
 const KEEP_CANCELLED = process.env.KEEP_CANCELLED === '1';
@@ -24,8 +26,10 @@ const pick = (o, ...names) => {
 // 인증키가 Encoding 키(%가 들어 있음)이면 그대로, Decoding 키이면 인코딩해서 붙인다.
 const keyParam = KEY.includes('%') ? KEY : encodeURIComponent(KEY);
 
-async function fetchPage(op, pageNo) {
-  const url = `${BASE}/${op}?serviceKey=${keyParam}&type=json&numOfRows=${ROWS}&pageNo=${pageNo}`;
+class OptionalSkip extends Error {}
+
+async function fetchPage(op, pageNo, base = BASE, optional = false) {
+  const url = `${base}/${op}?serviceKey=${keyParam}&type=json&numOfRows=${ROWS}&pageNo=${pageNo}`;
   for (let attempt = 1; attempt <= 5; attempt++) {
     try {
       const res = await fetch(url, { signal: AbortSignal.timeout(30000) });
@@ -37,6 +41,7 @@ async function fetchPage(op, pageNo) {
         const fatal = ['SERVICE_KEY_IS_NOT_REGISTERED_ERROR', 'SERVICE_ACCESS_DENIED_ERROR',
           'DEADLINE_HAS_EXPIRED_ERROR', 'LIMITED_NUMBER_OF_SERVICE_REQUESTS_EXCEEDS_ERROR'];
         if (fatal.includes(err.errMsg)) {
+          if (optional) throw new OptionalSkip(err.errMsg);
           console.error(`API 오류(재시도하지 않음): ${err.errMsg} ${err.returnAuthMsg || ''}`);
           process.exit(1);
         }
@@ -49,6 +54,7 @@ async function fetchPage(op, pageNo) {
       if (!Array.isArray(items)) items = items.item ? [].concat(items.item) : [];
       return { total: Number(body.totalCount || 0), items };
     } catch (e) {
+      if (e instanceof OptionalSkip) throw e;
       console.warn(`  ${op} ${pageNo}쪽 실패(${attempt}/5): ${e.message}`);
       await sleep(1000 * attempt * attempt);
     }
@@ -56,15 +62,15 @@ async function fetchPage(op, pageNo) {
   throw new Error(`${op} ${pageNo}쪽을 끝내 받지 못했습니다.`);
 }
 
-async function fetchAll(op, label) {
-  const first = await fetchPage(op, 1);
+async function fetchAll(op, label, base = BASE, optional = false) {
+  const first = await fetchPage(op, 1, base, optional);
   const pages = Math.ceil(first.total / ROWS);
   console.log(`[${label}] 전체 ${first.total.toLocaleString()}건, ${pages}쪽`);
   if (first.items[0]) console.log(`[${label}] 항목 이름: ${Object.keys(first.items[0]).join(', ')}`);
   const all = [...first.items];
   for (let p = 2; p <= pages; p++) {
     await sleep(PAUSE_MS);
-    const { items } = await fetchPage(op, p);
+    const { items } = await fetchPage(op, p, base, optional);
     all.push(...items);
     if (p % 100 === 0) console.log(`  ${p}/${pages}쪽`);
   }
@@ -86,6 +92,13 @@ async function main() {
   const t0 = Date.now();
   const list = await fetchAll('getDrugPrdtPrmsnInq08', '제품 목록');
   const mcpn = await fetchAll('getDrugPrdtMcpnDtlInq08', '주성분');
+  let supplied = null; // 공급 실적이 있는 일반의약품 품목번호
+  try {
+    const easy = await fetchAll('getDrbEasyDrugList', 'e약은요(공급 실적 있는 일반의약품)', EASY_BASE, true);
+    supplied = new Set(easy.map((it) => pick(it, 'itemSeq', 'ITEM_SEQ')).filter(Boolean));
+  } catch (e) {
+    console.warn(`e약은요 자료를 받지 못해 일반의약품 유통 여부는 표시하지 않습니다(${e.message}). 공공데이터포털에서 '식품의약품안전처_의약품개요정보(e약은요)'를 활용신청하면 적용됩니다.`);
+  }
 
   // 1) 제품 정보 정리
   const products = new Map(); // ITEM_SEQ → 정보
@@ -144,16 +157,18 @@ async function main() {
       const [ai, aq] = a.split(':'); const [bi, bq] = b.split(':');
       return (+ai - +bi) || aq.localeCompare(bq);
     }).join(';');
-    p.push([seq, info.name, info.company, info.date, info.kind]);
+    // 표시값: 1 = 수출용(국내 판매 안 함), 2 = 공급 실적 확인(e약은요에 있음)
+    const flag = (/수출용/.test(info.name) ? 1 : 0) | (supplied && supplied.has(seq) ? 2 : 0);
+    p.push([seq, info.name, info.company, info.date, info.kind, flag]);
     c.push(key);
   }
 
-  const out = { v: 1, updated: new Date().toISOString(), ing: ingList, units: unitList, p, c };
+  const out = { v: 2, updated: new Date().toISOString(), otcSupply: !!supplied, ing: ingList, units: unitList, p, c };
   await mkdir('data', { recursive: true });
   await writeFile('data/drugs.json', JSON.stringify(out));
   await writeFile('data/meta.json', JSON.stringify({
     updated: out.updated, products: p.length, ingredients: ingList.length,
-    sourceList: list.length, sourceIngredientRows: mcpn.length, cancelledExcluded: KEEP_CANCELLED ? 0 : cancelled,
+    sourceList: list.length, sourceIngredientRows: mcpn.length, cancelledExcluded: KEEP_CANCELLED ? 0 : cancelled, otcSupplied: supplied ? supplied.size : null,
   }, null, 2));
   console.log(`완료: 제품 ${p.length.toLocaleString()}개, 성분 ${ingList.length.toLocaleString()}종, ${((Date.now() - t0) / 60000).toFixed(1)}분`);
 }
