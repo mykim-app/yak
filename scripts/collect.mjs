@@ -1,7 +1,7 @@
 // 식약처 「의약품 제품 허가정보」 API 전체를 받아 검색용 색인(data/drugs.json)을 만든다.
 // 주성분 API는 성분명으로 검색하는 기능이 없어서, 전체를 미리 받아 두고 화면에서 찾는 방식을 쓴다.
 // 실행: DATA_GO_KR_KEY=발급받은_인증키 node scripts/collect.mjs
-import { writeFile, mkdir } from 'node:fs/promises';
+import { writeFile, mkdir, rm } from 'node:fs/promises';
 
 // 붙여 넣을 때 섞여 들어간 앞뒤 공백·줄바꿈을 없앤다.
 const KEY = (process.env.DATA_GO_KR_KEY || '').replace(/\s+/g, '');
@@ -28,11 +28,11 @@ const keyParam = KEY.includes('%') ? KEY : encodeURIComponent(KEY);
 
 class OptionalSkip extends Error {}
 
-async function fetchPage(op, pageNo, base = BASE, optional = false) {
-  const url = `${base}/${op}?serviceKey=${keyParam}&type=json&numOfRows=${ROWS}&pageNo=${pageNo}`;
-  for (let attempt = 1; attempt <= 5; attempt++) {
+async function fetchPage(op, pageNo, base = BASE, optional = false, rows = ROWS, timeoutMs = 30000, tries = 5) {
+  const url = `${base}/${op}?serviceKey=${keyParam}&type=json&numOfRows=${rows}&pageNo=${pageNo}`;
+  for (let attempt = 1; attempt <= tries; attempt++) {
     try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(30000) });
+      const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
       const text = await res.text();
       let json;
       try { json = JSON.parse(text); } catch { throw new Error(`JSON 아님: ${text.slice(0, 200)}`); }
@@ -55,7 +55,7 @@ async function fetchPage(op, pageNo, base = BASE, optional = false) {
       return { total: Number(body.totalCount || 0), items };
     } catch (e) {
       if (e instanceof OptionalSkip) throw e;
-      console.warn(`  ${op} ${pageNo}쪽 실패(${attempt}/5): ${e.message}`);
+      console.warn(`  ${op} ${pageNo}쪽 실패(${attempt}/${tries}): ${e.message}`);
       await sleep(1000 * attempt * attempt);
     }
   }
@@ -81,6 +81,69 @@ async function fetchAll(op, label, base = BASE, optional = false) {
   return all;
 }
 
+// ── 효능·부작용 요약용 ──
+const ENT = { nbsp: ' ', lt: '<', gt: '>', amp: '&', quot: '"', apos: "'", middot: '·' };
+const unesc = (t) => t.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e) =>
+  e[0] === '#' ? String.fromCodePoint(e[1].toLowerCase() === 'x' ? parseInt(e.slice(2), 16) : +e.slice(1)) : (ENT[e.toLowerCase()] ?? m));
+const clean = (t) => unesc(String(t || '').replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
+const cdata = (xml) => [...String(xml || '').matchAll(/<!\[CDATA\[([\s\S]*?)\]\]>/g)].map((m) => clean(m[1])).filter(Boolean);
+const articles = (xml) => [...String(xml || '').matchAll(/<ARTICLE title="([^"]*)"[^>]*>([\s\S]*?)<\/ARTICLE>/g)]
+  .map((m) => ({ title: clean(m[1]), paras: cdata(m[2]) }));
+function shorten(t, n) {
+  t = clean(t);
+  if (t.length <= n) return t;
+  const cut = t.slice(0, n);
+  const at = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('다.'), cut.lastIndexOf(', '));
+  return (at > n * 0.5 ? cut.slice(0, at + 1) : cut).trim() + '…';
+}
+// 허가사항 문서에서 효능과 주요 부작용을 짧게 뽑는다.
+function fromPermitDoc(it) {
+  const eff = shorten(cdata(it.EE_DOC_DATA).join(' '), 200);
+  const arts = articles(it.NB_DOC_DATA);
+  let se = '';
+  const adverse = arts.find((a) => /이상반응|부작용/.test(a.title));
+  if (adverse) {
+    const listed = adverse.paras.filter((x) => /[가-힣]+계\s*[:：]|피부\s*[:：]|과민증/.test(x));
+    se = (listed.length ? listed : adverse.paras).join(' ');
+  } else {
+    const stop = arts.find((a) => /(즉각|즉시)[^.]*중지/.test(a.title));
+    if (stop) se = stop.paras.join(' ');
+  }
+  // 빈도 표의 머리글(흔하게 (≥ 1/100 …) 등)은 뺀다.
+  se = se.replace(/(매우\s*)?(흔하게|흔하지\s*않게|드물게|빈도\s*불명)\s*\([^)]*\)/g, ' ').replace(/^\s*기관계\s*/, '');
+  return [eff, shorten(se, 240)];
+}
+// 조합 번호 → 조각 파일 번호 (화면에서 같은 계산을 한다)
+const SHARDS = 128;
+const shardOf = (key) => { let h = 5381; for (const ch of key) h = ((h * 33) ^ ch.charCodeAt(0)) >>> 0; return h % SHARDS; };
+
+async function fetchEach(op, label, onItems, conc = 3) {
+  const first = await fetchPage(op, 1);
+  const pages = Math.ceil(first.total / ROWS);
+  console.log(`[${label}] 전체 ${first.total.toLocaleString()}건, ${pages}쪽 (동시 ${conc}개)`);
+  onItems(first.items);
+  let next = 2, done = 1, skipped = 0;
+  await Promise.all(Array.from({ length: conc }, async () => {
+    while (next <= pages) {
+      const pg = next++;
+      await sleep(PAUSE_MS);
+      try {
+        const { items } = await fetchPage(op, pg, BASE, false, ROWS, 90000, 3);
+        onItems(items);
+      } catch {
+        // 문서가 큰 쪽은 20건씩 나눠 받는다. 그래도 안 되는 부분은 건너뛴다.
+        const per = 20, sub = ROWS / per;
+        for (let s = 1; s <= sub; s++) {
+          try { const { items } = await fetchPage(op, (pg - 1) * sub + s, BASE, false, per, 90000, 3); onItems(items); }
+          catch { skipped += per; console.warn(`  ${pg}쪽 일부(${per}건)를 건너뜁니다.`); }
+        }
+      }
+      if (++done % 50 === 0) console.log(`  ${done}/${pages}쪽`);
+    }
+  }));
+  if (skipped) console.warn(`[${label}] 받지 못한 ${skipped}건은 다음 갱신 때 다시 시도합니다.`);
+}
+
 function normQnt(q) {
   const s = String(q ?? '').trim().replace(/,/g, '');
   if (s === '') return '';
@@ -93,9 +156,14 @@ async function main() {
   const list = await fetchAll('getDrugPrdtPrmsnInq08', '제품 목록');
   const mcpn = await fetchAll('getDrugPrdtMcpnDtlInq08', '주성분');
   let supplied = null; // 공급 실적이 있는 일반의약품 품목번호
+  const easyText = new Map(); // 품목번호 → [효능, 부작용] (쉬운 말)
   try {
     const easy = await fetchAll('getDrbEasyDrugList', 'e약은요(공급 실적 있는 일반의약품)', EASY_BASE, true);
     supplied = new Set(easy.map((it) => pick(it, 'itemSeq', 'ITEM_SEQ')).filter(Boolean));
+    for (const it of easy) {
+      const seq = pick(it, 'itemSeq', 'ITEM_SEQ');
+      if (seq) easyText.set(seq, [shorten(pick(it, 'efcyQesitm'), 200), shorten(pick(it, 'seQesitm'), 240)]);
+    }
   } catch (e) {
     console.warn(`e약은요 자료를 받지 못해 일반의약품 유통 여부는 표시하지 않습니다(${e.message}). 공공데이터포털에서 '식품의약품안전처_의약품개요정보(e약은요)'를 활용신청하면 적용됩니다.`);
   }
@@ -163,12 +231,43 @@ async function main() {
     c.push(key);
   }
 
+  // 4) 효능·부작용: 같은 성분 조합끼리 하나로 묶어 조각 파일로 저장
+  const keyOf = new Map(p.map((row, k) => [row[0], c[k]]));
+  const info = new Map(); // 조합 → [효능, 부작용, 출처(1=e약은요, 2=허가사항)]
+  const put = (key, eff, se, src) => {
+    if (!eff && !se) return;
+    const cur = info.get(key);
+    const score = (src === 1 ? 4 : 0) + (eff ? 2 : 0) + (se ? 1 : 0);
+    if (!cur || score > cur[3]) info.set(key, [eff, se, src, score]);
+  };
+  for (const [seq, [eff, se]] of easyText) { const k = keyOf.get(seq); if (k) put(k, eff, se, 1); }
+  if (process.env.SKIP_DETAIL !== '1') {
+    try {
+      await fetchEach('getDrugPrdtPrmsnDtlInq08', '허가사항(효능·주의사항)', (items) => {
+        for (const it of items) {
+          const k = keyOf.get(pick(it, 'ITEM_SEQ'));
+          if (!k) continue;
+          const [eff, se] = fromPermitDoc(it);
+          put(k, eff, se, 2);
+        }
+      });
+    } catch (e) {
+      console.warn(`허가사항을 끝까지 받지 못했습니다(${e.message}). 받은 만큼만 저장합니다.`);
+    }
+  }
+  await rm('data/info', { recursive: true, force: true });
+  await mkdir('data/info', { recursive: true });
+  const shards = Array.from({ length: SHARDS }, () => ({}));
+  for (const [k, [eff, se, src]] of info) shards[shardOf(k)][k] = [eff, se, src];
+  await Promise.all(shards.map((o, n) => writeFile(`data/info/${n}.json`, JSON.stringify(o))));
+  console.log(`효능·부작용: 성분 조합 ${info.size.toLocaleString()}개`);
+
   const out = { v: 2, updated: new Date().toISOString(), otcSupply: !!supplied, ing: ingList, units: unitList, p, c };
   await mkdir('data', { recursive: true });
   await writeFile('data/drugs.json', JSON.stringify(out));
   await writeFile('data/meta.json', JSON.stringify({
     updated: out.updated, products: p.length, ingredients: ingList.length,
-    sourceList: list.length, sourceIngredientRows: mcpn.length, cancelledExcluded: KEEP_CANCELLED ? 0 : cancelled, otcSupplied: supplied ? supplied.size : null,
+    sourceList: list.length, sourceIngredientRows: mcpn.length, cancelledExcluded: KEEP_CANCELLED ? 0 : cancelled, otcSupplied: supplied ? supplied.size : null, infoCombos: info.size,
   }, null, 2));
   console.log(`완료: 제품 ${p.length.toLocaleString()}개, 성분 ${ingList.length.toLocaleString()}종, ${((Date.now() - t0) / 60000).toFixed(1)}분`);
 }
