@@ -31,6 +31,13 @@ h1{font-size:clamp(28px,5vw,40px);line-height:1.2;letter-spacing:-0.03em;font-we
 .search input{width:100%;font:inherit;font-size:20px;font-weight:600;padding:18px 22px;border-radius:999px;
   border:2px solid var(--ink);background:var(--card);color:var(--ink);outline:none}
 .search input:focus-visible{border-color:var(--green);box-shadow:0 0 0 4px var(--green-soft)}
+.avail{display:inline-flex;align-items:center;gap:8px;margin:12px 6px 0;font-size:15px;cursor:pointer;user-select:none}
+.avail input{width:18px;height:18px;accent-color:var(--green);margin:0}
+.avail small{color:var(--muted);font-size:13px}
+.hidden-note{color:var(--muted);font-size:13px;margin:8px 4px 0}
+.typo{margin-top:8px}
+.typo button{all:unset;cursor:pointer;color:var(--green);font-weight:700;border-bottom:1px solid currentColor;margin-right:10px}
+.typo button:focus-visible{outline:2px solid var(--green);outline-offset:2px}
 .status{margin:10px 6px 0;color:var(--muted);font-size:14px;min-height:22px}
 .status.err{color:var(--warn)}
 .suggest{list-style:none;margin:12px 0 0;padding:0;border-top:1px solid var(--line)}
@@ -97,6 +104,7 @@ footer p{margin:0 0 6px}
 
   <div class="search" role="search">
     <input id="q" type="search" autocomplete="off" placeholder="약 이름 입력" aria-label="약 이름" aria-controls="suggest" disabled>
+    <label class="avail"><input type="checkbox" id="onlyAvail" checked> 시중에서 구할 수 있는 제품만 <small id="availNote">(수출용 제외)</small></label>
     <div id="status" class="status" aria-live="polite">자료를 불러오는 중입니다…</div>
     <ul id="suggest" class="suggest"></ul>
   </div>
@@ -153,6 +161,7 @@ footer p{margin:0 0 6px}
     $('#updated').textContent = `갱신일 ${new Date(D.updated).toLocaleDateString('ko-KR')}`;
     statusEl.classList.remove('err');
     statusEl.textContent = `제품 ${D.p.length.toLocaleString()}개를 찾을 수 있습니다.`;
+    $('#availNote').textContent = D.otcSupply ? '(수출용, 공급 실적 없는 일반의약품 제외)' : '(수출용 제외)';
     qEl.disabled = false; qEl.focus();
     route();
     return true;
@@ -177,13 +186,50 @@ footer p{margin:0 0 6px}
     return hits.map((h) => h[0]);
   }
 
+  // 글자 하나를 잘못 친 경우(예: 리조랄 → 니조랄)를 자모 단위로 비교해 가까운 이름을 찾는다.
+  const jamo = (ch) => {
+    const c = ch.charCodeAt(0) - 0xAC00;
+    return c >= 0 && c < 11172 ? [Math.floor(c / 588), Math.floor((c % 588) / 28), c % 28] : [ch];
+  };
+  const sylDiff = (a, b) => {
+    if (a === b) return 0;
+    const x = jamo(a), y = jamo(b);
+    if (x.length !== 3 || y.length !== 3) return 3;
+    return (x[0] !== y[0]) + (x[1] !== y[1]) + (x[2] !== y[2]);
+  };
+  function nearNames(q) {
+    const t = n(q); if (t.length < 2) return [];
+    const best = new Map(); // 후보 이름 → 점수
+    for (let i = 0; i < norm.length; i++) {
+      if (onlyEl.checked && !avail(i)) continue;
+      const s = norm[i];
+      for (let k = 0; k + t.length <= s.length && k <= 3; k++) {
+        let score = 0, changed = 0;
+        for (let m = 0; m < t.length && score <= 2; m++) { const d = sylDiff(t[m], s[k + m]); if (d) { score += d; changed++; } }
+        if (score === 0 || score > 2 || changed > 1) continue;
+        const w = s.slice(k, k + t.length); const sc = score + k * 0.1;
+        if (!best.has(w) || best.get(w) > sc) best.set(w, sc);
+      }
+    }
+    return [...best.entries()].sort((a, b) => a[1] - b[1]).slice(0, 4).map((x) => x[0]);
+  }
+
   function showSuggest() {
     const q = qEl.value.trim();
     sugEl.innerHTML = '';
     if (!D || q.length < 1) { statusEl.textContent = D ? `제품 ${D.p.length.toLocaleString()}개를 찾을 수 있습니다.` : statusEl.textContent; return; }
-    const hits = search(q);
+    const allHits = search(q);
+    const hits = allHits.filter(keep);
     statusEl.classList.remove('err');
-    if (!hits.length) { statusEl.textContent = `'${q}'(으)로 찾은 제품이 없습니다. 이름 일부만 넣거나 성분 이름으로 찾아 보세요.`; return; }
+    if (!hits.length) {
+      if (allHits.length) { statusEl.textContent = `'${q}'(으)로 찾은 제품 ${allHits.length}개가 모두 수출용 등 시중에서 구하기 어려운 제품입니다. 위의 선택을 끄면 볼 수 있습니다.`; return; }
+      const near = nearNames(q);
+      statusEl.innerHTML = `'${esc(q)}'(으)로 찾은 제품이 없습니다.` + (near.length
+        ? `<div class="typo">혹시 이 약인가요? ${near.map((w) => `<button type="button" data-w="${esc(w)}">${esc(w)}</button>`).join('')}</div>`
+        : ' 이름 일부만 넣거나 성분 이름으로 찾아 보세요.');
+      statusEl.querySelectorAll('.typo button').forEach((b) => b.addEventListener('click', () => { qEl.value = b.dataset.w; showSuggest(); }));
+      return;
+    }
     statusEl.textContent = `${hits.length.toLocaleString()}개 제품이 있습니다. 하나를 고르세요.`;
     const LIMIT = 40;
     sugEl.innerHTML = hits.slice(0, LIMIT).map((i) => {
@@ -202,19 +248,31 @@ footer p{margin:0 0 6px}
         <td>${esc(p[2])}</td><td class="kind">${KIND[p[4]] || ''}</td><td class="date">${fmtDate(p[3])}</td></tr>`;
     }).join('');
   }
+  const onlyEl = $('#onlyAvail');
+  // 수출용은 국내에서 팔지 않음. 일반의약품은 e약은요 공급 실적 자료가 있을 때 거기 있는 것만 유통으로 봄.
+  const avail = (i) => {
+    const f = D.p[i][5] || 0;
+    if (f & 1) return false;
+    if (D.otcSupply && D.p[i][4] === 2 && !(f & 2)) return false;
+    return true;
+  };
+  const keep = (i) => !onlyEl.checked || avail(i);
+  const hiddenNote = (all, shown) => all > shown ? `<div class="hidden-note">수출용 등 시중에서 구하기 어려운 제품 ${all - shown}개는 숨겼습니다.</div>` : '';
   const byDate = (a, b) => (D.p[a][3] || '99999999').localeCompare(D.p[b][3] || '99999999');
   const tableHtml = (body) => `<div class="tbl"><table><thead><tr><th>제품명</th><th>회사</th><th class="kind">구분</th><th>허가일</th></tr></thead><tbody>${body}</tbody></table></div>`;
 
   function showProduct(i) {
     const p = D.p[i], key = D.c[i];
     const ings = parts(key);
-    const same = (exact.get(key) || []).slice().sort(byDate);
+    const sameAll = (exact.get(key) || []).filter((x) => x !== i);
+    const same = [i, ...sameAll.filter(keep)].sort(byDate);
     const firstIdx = same.find((x) => D.p[x][3]);
-    const others = (bySet.get(setKey(key)) || []).filter((x) => D.c[x] !== key);
+    const othersAll = (bySet.get(setKey(key)) || []).filter((x) => D.c[x] !== key);
+    const others = othersAll.filter(keep);
     const groups = new Map(); others.forEach((x) => { const k = D.c[x]; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(x); });
     // 복합제: 주성분이 한 가지만 다르고 나머지는 같은 제품 (예: 같은 약초라도 추출 방법이 다른 원료)
     const mySet = [...new Set(setKey(key).split(','))];
-    const similar = [];
+    const similar = []; let similarAll = 0;
     if (mySet.length >= 2) {
       const shared = new Map();
       mySet.forEach((g) => (byIng.get(g) || []).forEach((x) => shared.set(x, (shared.get(x) || 0) + 1)));
@@ -222,7 +280,7 @@ footer p{margin:0 0 6px}
         if (x === i || setKey(D.c[x]) === setKey(key)) return;
         const other = new Set(setKey(D.c[x]).split(','));
         const missing = mySet.length - cnt, extra = other.size - cnt;
-        if (cnt >= 2 && missing <= 1 && extra <= 1) similar.push([x, cnt, missing, extra]);
+        if (cnt >= 2 && missing <= 1 && extra <= 1) { similarAll++; if (keep(x)) similar.push([x, cnt, missing, extra]); }
       });
       similar.sort((a, b) => b[1] - a[1] || (a[2] + a[3]) - (b[2] + b[3]) || byDate(a[0], b[0]));
     }
@@ -249,6 +307,7 @@ footer p{margin:0 0 6px}
           <p>주성분과 함량이 모두 같은 제품입니다. 흔히 말하는 카피약(복제약)이 여기에 해당합니다. 허가일 순으로 정렬했습니다.</p></div>
         ${same.length > 8 ? '<div class="filter"><input id="f" type="search" placeholder="목록 안에서 제품명·회사 찾기" aria-label="목록 안에서 찾기"></div>' : ''}
         ${same.length > 1 ? tableHtml(rowsHtml(same, i, firstIdx)) : '<div class="empty">주성분과 함량이 같은 다른 제품이 없습니다.</div>'}
+        ${hiddenNote(sameAll.length + 1, same.length)}
       </section>
 
       <section class="group">
@@ -257,13 +316,14 @@ footer p{margin:0 0 6px}
         ${groups.size ? [...groups.entries()].sort((a, b) => b[1].length - a[1].length).map(([k, list]) =>
           `<details class="strength"><summary>${esc(strengthText(k))} <span>${list.length}개</span></summary>${tableHtml(rowsHtml(list.sort(byDate), -1, -1))}</details>`).join('')
           : '<div class="empty">함량만 다른 제품은 없습니다.</div>'}
+        ${hiddenNote(othersAll.length, others.length)}
       </section>
       ${mySet.length >= 2 ? `<section class="group">
         <div class="ghead"><span class="n">${similar.length.toLocaleString()}</span><h2>주성분이 한 가지만 다른 제품</h2>
           <p>여러 성분이 섞인 약(복합제)에서, 성분 하나만 빠지거나 다른 원료로 바뀐 제품입니다. 같은 약초라도 원료 규격이 다르면 여기에 나옵니다.</p></div>
         ${similar.length ? `<div class="tbl"><table><thead><tr><th>제품명</th><th>회사</th><th>차이</th><th>허가일</th></tr></thead><tbody>${
           similar.slice(0, 60).map(([x]) => { const q = D.p[x]; return `<tr><td><a class="prod" href="#seq=${esc(q[0])}">${esc(q[1])}</a></td><td>${esc(q[2])}</td><td class="diff">${diffText(x)}</td><td class="date">${fmtDate(q[3])}</td></tr>`; }).join('')
-        }</tbody></table></div>${similar.length > 60 ? `<div class="empty">그 밖에 ${similar.length - 60}개가 더 있습니다.</div>` : ''}` : '<div class="empty">해당하는 제품이 없습니다.</div>'}
+        }</tbody></table></div>${hiddenNote(similarAll, similar.length)}${similar.length > 60 ? `<div class="empty">그 밖에 ${similar.length - 60}개가 더 있습니다.</div>` : ''}` : '<div class="empty">해당하는 제품이 없습니다.</div>' + hiddenNote(similarAll, 0)}
       </section>` : ''}`;
 
     const f = $('#f');
@@ -301,6 +361,7 @@ footer p{margin:0 0 6px}
     if (e.key === 'ArrowDown') { e.preventDefault(); li.nextElementSibling?.querySelector('button')?.focus(); }
     if (e.key === 'ArrowUp') { e.preventDefault(); (li.previousElementSibling?.querySelector('button') || qEl).focus(); }
   });
+  onlyEl.addEventListener('change', () => { if (!D) return; if (qEl.value.trim()) showSuggest(); if (location.hash) route(); });
   window.addEventListener('hashchange', route);
   load();
 })();
