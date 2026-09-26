@@ -3,8 +3,9 @@
 // 실행: DATA_GO_KR_KEY=발급받은_인증키 node scripts/collect.mjs
 import { writeFile, mkdir } from 'node:fs/promises';
 
-const KEY = process.env.DATA_GO_KR_KEY;
-const BASE = process.env.API_BASE || 'https://apis.data.go.kr/1471000/DrugPrdtPrmsnInfoService07';
+// 붙여 넣을 때 섞여 들어간 앞뒤 공백·줄바꿈을 없앤다.
+const KEY = (process.env.DATA_GO_KR_KEY || '').replace(/\s+/g, '');
+const BASE = process.env.API_BASE || 'https://apis.data.go.kr/1471000/DrugPrdtPrmsnInfoService08';
 const ROWS = 100;          // 한 번에 받을 수 있는 최대 건수
 const PAUSE_MS = 150;      // 초당 호출 제한을 피하기 위한 간격
 const KEEP_CANCELLED = process.env.KEEP_CANCELLED === '1';
@@ -83,8 +84,8 @@ function normQnt(q) {
 
 async function main() {
   const t0 = Date.now();
-  const list = await fetchAll('getDrugPrdtPrmsnInq07', '제품 목록');
-  const mcpn = await fetchAll('getDrugPrdtMcpnDtlInq07', '주성분');
+  const list = await fetchAll('getDrugPrdtPrmsnInq08', '제품 목록');
+  const mcpn = await fetchAll('getDrugPrdtMcpnDtlInq08', '주성분');
 
   // 1) 제품 정보 정리
   const products = new Map(); // ITEM_SEQ → 정보
