@@ -128,6 +128,12 @@ async function main() {
     }
   }
 
+  // 같은 성분이 함량 있는 줄과 빈 줄로 두 번 들어간 경우 빈 줄은 뺀다.
+  for (const set of comp.values()) {
+    const withQty = new Set([...set].filter((x) => x.split(':')[1] !== '').map((x) => x.split(':')[0]));
+    for (const x of [...set]) { const [i, q] = x.split(':'); if (q === '' && withQty.has(i)) set.delete(x); }
+  }
+
   // 3) 색인 만들기: 성분 정보가 있는 제품만, 기본은 취소·취하 제품 제외
   const p = []; const c = [];
   for (const [seq, info] of products) {
