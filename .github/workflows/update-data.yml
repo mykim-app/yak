@@ -3,7 +3,7 @@ name: 의약품 자료 갱신
 on:
   schedule:
     - cron: '0 18 * * 0'   # 매주 월요일 새벽 3시(한국시간)
-  workflow_dispatch: {}     # Actions 화면에서 직접 실행
+  workflow_dispatch: {}     # Actions 탭에서 직접 실행(처음 한 번)
 
 permissions:
   contents: write
@@ -18,10 +18,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          node-version: '24'
       - name: 식약처 자료 받기
         env:
           DATA_GO_KR_KEY: ${{ secrets.DATA_GO_KR_KEY }}
