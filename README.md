@@ -15,7 +15,9 @@
 3. **인증키 등록**: 저장소 Settings → Secrets and variables → Actions → New repository secret
    - 이름: `DATA_GO_KR_KEY`
    - 값: 1번에서 복사한 인증키
-4. **자료 받기**: Actions 탭 → "의약품 자료 갱신" → Run workflow. 10~20분 정도 걸립니다. 끝나면 `data/drugs.json`이 자동으로 올라옵니다.
+4. **자료 받기**: 사이트 화면의 **"지금 자료 받기"**(자료가 있을 때는 맨 아래 **"자료 갱신"**)를 누르고 GitHub 토큰을 넣으면 바로 실행됩니다. 진행 상황이 창에 표시되고, 끝나면 화면이 새 자료로 바뀝니다.
+   - 토큰 만드는 법: GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens → 이 저장소 하나만 선택 → Repository permissions의 **Actions: Read and write**. 토큰은 그 기기의 브라우저에만 저장됩니다.
+   - 사이트를 거치지 않으려면 Actions 탭 → "의약품 자료 갱신" → Run workflow. 10~20분 정도 걸립니다. 끝나면 `data/drugs.json`이 자동으로 올라옵니다.
    - 실패하면서 권한 오류가 나오면 Settings → Actions → General → Workflow permissions를 "Read and write permissions"로 바꿉니다.
 5. **게시**: Settings → Pages → Source를 "Deploy from a branch", Branch를 `main` / `(root)`로 지정합니다. 주소는 `https://mykim-app.github.io/drug-finder/` 입니다.
 
