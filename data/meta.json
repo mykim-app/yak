@@ -1,9 +1,10 @@
 {
-  "updated": "2026-09-26T11:01:57.000Z",
+  "updated": "2026-09-26T13:15:18.151Z",
   "products": 34757,
   "ingredients": 5543,
   "sourceList": 42977,
   "sourceIngredientRows": 126862,
   "cancelledExcluded": 7707,
-  "otcSupplied": null
+  "otcSupplied": 4757,
+  "infoCombos": 9553
 }
