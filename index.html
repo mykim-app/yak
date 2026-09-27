@@ -128,6 +128,7 @@ footer p{margin:0 0 6px}
 <div class="wrap">
   <div class="tabs" role="tablist" aria-label="찾을 종류">
     <button type="button" role="tab" aria-selected="true" data-mode="drug">의약품</button>
+    <button type="button" role="tab" aria-selected="false" data-mode="qd">의약외품</button>
     <button type="button" role="tab" aria-selected="false" data-mode="hf">건강기능식품</button>
   </div>
   <h1 id="h1">약 이름을 넣으면<br>성분과 카피약이 나옵니다</h1>
@@ -565,6 +566,7 @@ window.YAK.clampBoxes = (root) => {
   // 전환 버튼
   const TEXT = {
     drug: ['약 이름을 넣으면<br>성분과 카피약이 나옵니다', '제품 이름(예: 타이레놀, 리피토)이나 성분 이름으로 찾으세요.', '약 이름 입력'],
+    qd: ['의약외품을<br>성분과 분류로 비교합니다', '제품 이름(예: 박카스, 리스테린), 성분이나 종류(마스크, 치약)로 찾으세요.', '의약외품 이름 입력'],
     hf: ['건강기능식품을<br>원료로 비교합니다', '제품 이름이나 원료 이름(예: 루테인, 오메가3, 유산균)으로 찾으세요.', '건강기능식품 이름 입력'],
   };
   window.YAK.setMode = (mode, fromHash) => {
@@ -575,7 +577,8 @@ window.YAK.clampBoxes = (root) => {
     document.querySelector('.avail').hidden = mode !== 'drug';
     resEl.innerHTML = ''; sugEl.innerHTML = '';
     if (!fromHash && location.hash) history.replaceState(null, '', location.pathname + location.search);
-    if (mode === 'hf') { qEl.disabled = false; ensure().then((ok) => { if (ok) { if (qEl.value.trim()) showSuggest(); else ready(); } }); }
+    if (mode === 'qd') { qEl.disabled = false; window.YAK.qdEnter(); }
+    else if (mode === 'hf') { qEl.disabled = false; ensure().then((ok) => { if (ok) { if (qEl.value.trim()) showSuggest(); else ready(); } }); }
     else if (window.YAK.drugSearch) window.YAK.drugSearch();
     qEl.focus();
   };
@@ -584,8 +587,131 @@ window.YAK.clampBoxes = (root) => {
   qEl.addEventListener('input', () => { if (window.YAK.mode !== 'hf') return; clearTimeout(timer); timer = setTimeout(showSuggest, 150); });
   qEl.addEventListener('keydown', (e) => { if (window.YAK.mode === 'hf' && e.key === 'ArrowDown') { const b = sugEl.querySelector('button'); if (b) { e.preventDefault(); b.focus(); } } });
   sugEl.addEventListener('click', (e) => { if (window.YAK.mode !== 'hf') return; const b = e.target.closest('button[data-h]'); if (!b) return; location.hash = `hf=${encodeURIComponent(H.p[+b.dataset.h][0])}`; });
-  window.addEventListener('hashchange', () => { if (/hf=/.test(location.hash)) route(); else if (window.YAK.mode === 'hf' && /seq=/.test(location.hash)) { window.YAK.setMode('drug', true); window.YAK.drugRoute(); } });
+  window.addEventListener('hashchange', () => { if (/hf=/.test(location.hash)) route(); else if (window.YAK.mode !== 'drug' && /seq=/.test(location.hash)) { window.YAK.setMode('drug', true); window.YAK.drugRoute(); } });
   if (/hf=/.test(location.hash)) route();
+})();
+</script>
+<script>
+// ── 의약외품 ──
+(() => {
+  const $ = (s) => document.querySelector(s);
+  const qEl = $('#q'), statusEl = $('#status'), sugEl = $('#suggest'), resEl = $('#result');
+  let Q = null, loading = null, norm = [], ingNorm = [], clsNorm = [], bySet = new Map(), byIng = new Map(), byCls = new Map();
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const n = (s) => String(s).toLowerCase().replace(/\s+/g, '');
+  const fmtDate = (d) => d && d.length === 8 ? `${d.slice(0,4)}.${d.slice(4,6)}.${d.slice(6)}` : '';
+  const shardOf = (key) => { let h = 5381; for (const ch of key) h = ((h * 33) ^ ch.charCodeAt(0)) >>> 0; return (h % 128) % 64; };
+  const setKey = (i) => Q.p[i][5].slice().sort((a, b) => a - b).join(',');
+  const ingText = (i, max = 99) => { const g = Q.p[i][5]; return g.slice(0, max).map((x) => Q.ing[x]).join(' + ') + (g.length > max ? ` 외 ${g.length - max}종` : ''); };
+  const byDateDesc = (a, b) => (Q.p[b][3] || '').localeCompare(Q.p[a][3] || '');
+  const mine = () => window.YAK.mode === 'qd';
+
+  async function ensure() {
+    if (Q) return true;
+    if (!loading) loading = (async () => {
+      statusEl.textContent = '의약외품 자료를 불러오는 중입니다…';
+      try { const r = await fetch(`data/qd.json?t=${Date.now()}`); if (!r.ok) throw 0; Q = await r.json(); }
+      catch { statusEl.textContent = '의약외품 자료가 아직 없습니다. 다음 자료 갱신 때 만들어집니다.'; return false; }
+      norm = Q.p.map((p) => n(p[1])); ingNorm = Q.ing.map(n); clsNorm = Q.cls.map(n);
+      Q.p.forEach((p, i) => {
+        if (p[5].length) { const k = setKey(i); if (!bySet.has(k)) bySet.set(k, []); bySet.get(k).push(i); }
+        p[5].forEach((g) => { if (!byIng.has(g)) byIng.set(g, []); byIng.get(g).push(i); });
+        if (!byCls.has(p[4])) byCls.set(p[4], []); byCls.get(p[4]).push(i);
+      });
+      return true;
+    })();
+    return loading;
+  }
+  const ready = () => { if (mine() && Q) statusEl.textContent = `의약외품 ${Q.p.length.toLocaleString()}개를 찾을 수 있습니다.`; };
+
+  function search(q) {
+    const tokens = q.split(/\s+/).map(n).filter(Boolean); if (!tokens.length) return [];
+    const whole = n(q), ingHit = new Set(), clsHit = new Set();
+    if (whole.length >= 2) { ingNorm.forEach((s, g) => { if (s.includes(whole)) ingHit.add(g); }); clsNorm.forEach((s, c) => { if (s.includes(whole)) clsHit.add(c); }); }
+    const hits = [];
+    for (let i = 0; i < norm.length; i++) {
+      const p = Q.p[i];
+      let score = tokens.every((t) => norm[i].includes(t)) ? 0 : (p[5].some((g) => ingHit.has(g)) ? 1 : (clsHit.has(p[4]) ? 2 : -1));
+      if (score < 0) continue;
+      const pos = norm[i].indexOf(tokens[0]);
+      hits.push([i, score, pos < 0 ? 999 : pos, norm[i].length]);
+    }
+    return hits.sort((a, b) => a[1] - b[1] || a[2] - b[2] || a[3] - b[3]).map((h) => h[0]);
+  }
+  async function showSuggest() {
+    if (!mine() || !(await ensure())) return;
+    const q = qEl.value.trim(); sugEl.innerHTML = '';
+    if (!q) { ready(); return; }
+    const hits = search(q);
+    if (!hits.length) { statusEl.textContent = `'${q}'(으)로 찾은 의약외품이 없습니다. 성분이나 종류(예: 마스크, 치약, 가글)로도 찾아 보세요.`; return; }
+    statusEl.textContent = `${hits.length.toLocaleString()}개 제품이 있습니다. 하나를 고르세요.`;
+    const LIMIT = 40;
+    sugEl.innerHTML = hits.slice(0, LIMIT).map((i) => { const p = Q.p[i];
+      return `<li><button type="button" data-q="${i}"><span class="left"><span class="nm">${esc(p[1])}</span><span class="cp">${esc(Q.cls[p[4]])}${p[5].length ? ' · ' + esc(ingText(i, 2)) : ''}</span></span><span class="co">${esc(p[2])}</span></button></li>`; }).join('')
+      + (hits.length > LIMIT ? `<li class="more">그 밖에 ${(hits.length - LIMIT).toLocaleString()}개가 더 있습니다. 이름을 더 넣어 좁혀 보세요.</li>` : '');
+  }
+  const rows = (list, me) => list.map((x) => { const q = Q.p[x];
+    return `<tr class="${x === me ? 'me' : ''}"><td><a class="prod" href="#qd=${esc(q[0])}">${esc(q[1])}</a></td><td>${esc(q[2])}</td><td class="amt">${esc(q[5].length ? ingText(x, 3) : Q.cls[q[4]])}</td><td class="date">${fmtDate(q[3])}</td></tr>`; }).join('');
+  const table = (list, me, id) => `<div class="tbl"><table><thead><tr><th>제품명</th><th>회사</th><th>주성분</th><th>허가일</th></tr></thead><tbody${id ? ` id="${id}"` : ''}>${rows(list, me)}</tbody></table></div>`;
+
+  async function showProduct(i) {
+    const p = Q.p[i], MAX = 150;
+    const lines = p[5].map((g) => `<div class="ing">${esc(Q.ing[g])}</div>`).join('') || `<div class="ing"><span>주성분 정보 없음</span></div>`;
+    const same = p[5].length ? (bySet.get(setKey(i)) || []).slice().sort(byDateDesc) : [];
+    const set = new Set(p[5]), similar = [];
+    if (set.size >= 2) {
+      const cnt = new Map(); set.forEach((g) => (byIng.get(g) || []).forEach((x) => cnt.set(x, (cnt.get(x) || 0) + 1)));
+      cnt.forEach((c, x) => { if (setKey(x) === setKey(i)) return; const o = new Set(Q.p[x][5]); if (c >= 2 && set.size - c <= 1 && o.size - c <= 1) similar.push(x); });
+    }
+    const clsAll = (byCls.get(p[4]) || []).filter((x) => x !== i).sort(byDateDesc);
+    resEl.innerHTML = `
+      <div class="pick">
+        <div class="capsule"><div class="a"><div class="name">${esc(p[1])}</div><div class="sub">${esc(p[2])}</div></div><div class="b" aria-label="주성분">${lines}</div></div>
+        <div class="tags"><span class="tag">의약외품</span><span class="tag">${esc(Q.cls[p[4]])}</span>${p[3] ? `<span class="tag">허가 ${fmtDate(p[3])}</span>` : ''}</div>
+        <div class="info three" id="qdinfo" aria-live="polite"></div>
+      </div>
+      ${p[5].length ? `<section class="group">
+        <div class="ghead"><span class="n">${(same.length - 1).toLocaleString()}</span><h2>주성분 구성이 같은 제품</h2>
+          <p>주성분이 똑같은 제품입니다. 의약외품 자료에는 함량이 없어서 성분 구성만으로 묶었습니다. 최근 허가순입니다.</p></div>
+        ${same.length > 1 ? table(same.slice(0, MAX), i) : '<div class="empty">같은 구성의 다른 제품이 없습니다.</div>'}
+        ${same.length > MAX ? `<div class="hidden-note">그 밖에 ${same.length - MAX}개가 더 있습니다.</div>` : ''}
+      </section>` : ''}
+      ${set.size >= 2 ? `<section class="group">
+        <div class="ghead"><span class="n">${similar.length.toLocaleString()}</span><h2>주성분이 한 가지만 다른 제품</h2><p>주성분 가운데 하나만 빠지거나 바뀐 제품입니다.</p></div>
+        ${similar.length ? table(similar.sort(byDateDesc).slice(0, 60), -1) : '<div class="empty">해당하는 제품이 없습니다.</div>'}
+      </section>` : ''}
+      <section class="group">
+        <div class="ghead"><span class="n">${clsAll.length.toLocaleString()}</span><h2>같은 종류(${esc(Q.cls[p[4]])})의 다른 제품</h2><p>식약처 분류가 같은 제품입니다. 최근 허가순으로 ${MAX}개까지 보여 주며, 아래 칸에서 이름이나 회사로 찾을 수 있습니다.</p></div>
+        <div class="filter"><input id="qdf" type="search" placeholder="이 종류 안에서 제품명·회사 찾기" aria-label="같은 종류 안에서 찾기"></div>
+        ${table(clsAll.slice(0, MAX), -1, 'qdcls')}
+      </section>`;
+    const f = $('#qdf'), body = $('#qdcls');
+    f.addEventListener('input', () => { const t = n(f.value); const list = t ? clsAll.filter((x) => n(Q.p[x][1] + Q.p[x][2]).includes(t)) : clsAll; body.innerHTML = rows(list.slice(0, MAX), -1) || '<tr><td colspan="4" class="empty">찾은 제품이 없습니다.</td></tr>'; });
+    document.title = `${p[1]} 의약외품 비교`;
+    const box = $('#qdinfo');
+    try { const r = await fetch(`data/qd-info/${shardOf(p[0])}.json?v=${encodeURIComponent(Q.updated)}`); const o = r.ok ? await r.json() : {};
+      const it = o[p[0]]; if ($('#qdinfo') !== box) return;
+      const lines2 = (t) => { const x = esc(t || '-').split(' · '); return x.length > 1 ? '· ' + x.join('<br>· ') : x[0]; };
+      box.innerHTML = it ? `<div class="box"><h3>효능·효과</h3><p>${esc(it[0] || '-')}</p></div><div class="box"><h3>사용법</h3><p>${esc(it[1] || '-')}</p></div><div class="box se"><h3>사용상 주의사항</h3><p>${lines2(it[2] || '특별한 주의사항 없음')}</p></div><p class="info-src">식약처 의약외품 제품 허가정보. <a href="https://nedrug.mfds.go.kr/pbp/CCBBB01/getItemDetail?itemSeq=${encodeURIComponent(p[0])}" target="_blank" rel="noopener">의약품안전나라에서 원문 보기</a></p>` : '';
+      window.YAK.clampBoxes(box);
+    } catch { box.innerHTML = ''; }
+  }
+  async function route() {
+    const m = location.hash.match(/qd=([^&]+)/); if (!m) return;
+    if (!mine()) window.YAK.setMode('qd', true);
+    if (!(await ensure())) return;
+    const i = Q.p.findIndex((p) => p[0] === decodeURIComponent(m[1]));
+    if (i < 0) { resEl.innerHTML = '<div class="empty">해당 제품을 찾지 못했습니다.</div>'; return; }
+    sugEl.innerHTML = ''; statusEl.textContent = '다른 제품을 찾으려면 이름을 다시 입력하세요.';
+    showProduct(i); resEl.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  }
+  window.YAK.qdEnter = () => ensure().then((ok) => { if (ok) { if (qEl.value.trim()) showSuggest(); else ready(); } });
+  let timer;
+  qEl.addEventListener('input', () => { if (!mine()) return; clearTimeout(timer); timer = setTimeout(showSuggest, 150); });
+  qEl.addEventListener('keydown', (e) => { if (mine() && e.key === 'ArrowDown') { const b = sugEl.querySelector('button'); if (b) { e.preventDefault(); b.focus(); } } });
+  sugEl.addEventListener('click', (e) => { if (!mine()) return; const b = e.target.closest('button[data-q]'); if (!b) return; location.hash = `qd=${encodeURIComponent(Q.p[+b.dataset.q][0])}`; });
+  window.addEventListener('hashchange', () => { if (/qd=/.test(location.hash)) route(); });
+  if (/qd=/.test(location.hash)) route();
 })();
 </script>
 </body>
