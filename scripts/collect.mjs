@@ -210,6 +210,31 @@ function parseHfStandard(txt) {
 const HF_SYN = { 셀레늄: '셀렌', 비타민b3: '나이아신' };
 const hfKey = (name) => { const k = name.replace(/\s+/g, '').replace(/수$/, '').replace(/와|과|및|,/g, '').toLowerCase(); return HF_SYN[k] || k; };
 
+// 번호(①, (1), 1. 등)와 줄바꿈으로 항목을 나누고, 같은 문장이 되풀이되면 한 번만 남긴다.
+function hfItems(t) {
+  const seen = new Set(), out = [];
+  const groups = String(t || '').split(/(?=\[[^\]\n]{2,40}\])/);
+  for (const g of groups) {
+    const head = (g.match(/^\[[^\]]{2,40}\]/) || [''])[0];
+    const body = g.slice(head.length);
+    const items = body.split(/\r?\n|\(\d{1,2}\)|\([가-하]\)|[①-⑳]|[⑴-⒇]|(?:^|\s)\d{1,2}[.)](?!\d)|[ㆍ•]|(?:^|\s)-\s/)
+      .map((x) => squash(x).replace(/^[\s·,.:;)]+|[\s,;(]+$/g, '').replace(/^(?:\d{1,2}|[가-하])\s*[.)]\s*/, '')).filter((x) => x.length >= 2);
+    items.forEach((x, k) => {
+      const key = x.replace(/[^가-힣A-Za-z0-9]/g, '');
+      if (!key || seen.has(key)) return;
+      seen.add(key); out.push({ text: (k === 0 && head ? head + ' ' : '') + x, specific: !!head });
+    });
+    if (!items.length && head && !seen.has(head)) { seen.add(head); }
+  }
+  return out;
+}
+// 주의사항: 원료별 문구([원료명] …)를 앞에, 모든 제품에 붙는 일반 문구를 뒤에 둔다.
+function hfCaution(t) {
+  const it = hfItems(t);
+  return shorten([...it.filter((x) => x.specific), ...it.filter((x) => !x.specific)].map((x) => x.text).join(' · '), 1000);
+}
+const hfFunction = (t) => shorten(hfItems(t).map((x) => x.text).join(' · '), 800);
+
 async function collectHealth(stamp) {
   let rows;
   try { rows = await fetchAll('getHtfsItem01', '건강기능식품', HF_BASE, true); }
@@ -228,7 +253,7 @@ async function buildHealth(rows, stamp) {
       if (!parts.some((x) => x[0] === ingIdx.get(k))) parts.push([ingIdx.get(k), amt]);
     }
     p.push([id, squash(name), squash(company), String(date).slice(0, 8), parts.map((x) => x[0]), parts.map((x) => x[1])]);
-    info[shardOf(id)][id] = [shorten(fn, 160), shorten(use, 120), shorten(String(hint).replace(/\s*\d+[.)]\s*/g, ' · ').replace(/^\s*·\s*/, ''), 200)];
+    info[shardOf(id)][id] = [hfFunction(fn), shorten(use, 200), hfCaution(hint)];
   }
   await rm('data/hf-info', { recursive: true, force: true });
   await mkdir('data/hf-info', { recursive: true });
