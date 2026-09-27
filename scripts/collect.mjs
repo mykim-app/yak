@@ -228,6 +228,8 @@ async function main() {
       date: pick(it, 'ITEM_PERMIT_DATE').replace(/\D/g, '').slice(0, 8),
       kind: kind.includes('전문') ? 1 : kind.includes('일반') ? 2 : 0,
       cancelled: isCancelled,
+      // 낱알 사진: 식약처 의약품안전나라 사진 주소의 끝부분만 보관
+      img: (pick(it, 'BIG_PRDT_IMG_URL').match(/itemImageDownload\/([^/?#\s]+)/) || [])[1] || '',
     });
   }
   if (products.size === 0) throw new Error('제품 목록이 비어 있습니다. 항목 이름(ITEM_SEQ 등)을 확인해 주세요.');
@@ -271,7 +273,7 @@ async function main() {
     }).join(';');
     // 표시값: 1 = 수출용(국내 판매 안 함), 2 = 공급 실적 확인(e약은요에 있음)
     const flag = (/수출용/.test(info.name) ? 1 : 0) | (supplied && supplied.has(seq) ? 2 : 0);
-    p.push([seq, info.name, info.company, info.date, info.kind, flag]);
+    p.push([seq, info.name, info.company, info.date, info.kind, flag, info.img || '']);
     c.push(key);
   }
 
@@ -306,7 +308,7 @@ async function main() {
   await Promise.all(shards.map((o, n) => writeFile(`data/info/${n}.json`, JSON.stringify(o))));
   console.log(`효능·부작용: 성분 조합 ${info.size.toLocaleString()}개`);
 
-  const out = { v: 2, updated: new Date().toISOString(), otcSupply: !!supplied, ing: ingList, units: unitList, p, c };
+  const out = { v: 3, updated: new Date().toISOString(), otcSupply: !!supplied, ing: ingList, units: unitList, p, c };
   await mkdir('data', { recursive: true });
   await writeFile('data/drugs.json', JSON.stringify(out));
   await writeFile('data/meta.json', JSON.stringify({
