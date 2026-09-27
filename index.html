@@ -32,6 +32,10 @@ body{background:var(--paper);color:var(--ink);
 .info.three{grid-template-columns:1fr 1fr 1fr}
 @media (max-width:760px){ .info.three{grid-template-columns:1fr} }
 td.amt{font-size:14px;color:var(--muted)}
+.variants{margin-top:12px;font-size:14px;color:var(--muted);line-height:1.7}
+.variants b{color:var(--ink);font-weight:600}
+.variants ol{margin:6px 0 0;padding-left:26px;color:var(--ink);columns:2 260px;column-gap:28px}
+.variants li{break-inside:avoid;padding:1px 0}
 h1{font-size:clamp(28px,5vw,40px);line-height:1.2;letter-spacing:-0.03em;font-weight:800;margin:0 0 8px}
 .lead{color:var(--muted);margin:0 0 28px}
 .search{position:relative}
@@ -605,6 +609,20 @@ window.YAK.clampBoxes = (root) => {
   const ingText = (i, max = 99) => { const g = Q.p[i][5]; return g.slice(0, max).map((x) => Q.ing[x]).join(' + ') + (g.length > max ? ` 외 ${g.length - max}종` : ''); };
   const byDateDesc = (a, b) => (Q.p[b][3] || '').localeCompare(Q.p[a][3] || '');
   const mine = () => window.YAK.mode === 'qd';
+  // 한 허가에 향·색만 다른 여러 제품이 "1.○○, 2.○○"처럼 함께 적힌 경우
+  const variants = (name) => {
+    name = name.replace(/,\s*삭제\s*(?=[,)])/g, '').replace(/\(\s*삭제\s*,\s*/g, '('); // 괄호 속 목록의 '삭제' 항목
+    if (!/^\s*(?:처방\s*)?1\s*[.):]/.test(name)) return [name];
+    // 1., 2., 3. … 차례대로 나오는 번호에서만 자른다 (제품명 속 숫자는 건드리지 않음)
+    // "1.1."처럼 번호가 겹친 경우도 한 번으로 본다
+    const cuts = []; let want = 1;
+    for (const m of name.matchAll(/(?<![\d.])(?:처방\s*)?(\d{1,2})\s*[.):](?:\s*\1\s*[.)])?/g)) { if (+m[1] === want) { cuts.push([m.index, m.index + m[0].length]); want++; } }
+    const out = cuts.map(([, end], k) => name.slice(end, k + 1 < cuts.length ? cuts[k + 1][0] : undefined)
+      .replace(/[,\s]+$/, '').replace(/[,\s]*처방$/, '').replace(/^\d{1,2}\s*[.)]\s*/, '').trim())
+      .filter((x) => x && !/^[<(\[]?\s*삭제\s*[>)\]]?$/.test(x)); // 허가에서 빠진 제품("삭제")은 뺀다
+    return out.length ? out : [name];
+  };
+  const shortName = (name) => { const v = variants(name); return v.length > 1 ? `${v[0]} 외 ${v.length - 1}종` : v[0]; };
 
   async function ensure() {
     if (Q) return true;
@@ -647,11 +665,11 @@ window.YAK.clampBoxes = (root) => {
     statusEl.textContent = `${hits.length.toLocaleString()}개 제품이 있습니다. 하나를 고르세요.`;
     const LIMIT = 40;
     sugEl.innerHTML = hits.slice(0, LIMIT).map((i) => { const p = Q.p[i];
-      return `<li><button type="button" data-q="${i}"><span class="left"><span class="nm">${esc(p[1])}</span><span class="cp">${esc(Q.cls[p[4]])}${p[5].length ? ' · ' + esc(ingText(i, 2)) : ''}</span></span><span class="co">${esc(p[2])}</span></button></li>`; }).join('')
+      return `<li><button type="button" data-q="${i}"><span class="left"><span class="nm">${esc(shortName(p[1]))}</span><span class="cp">${esc(Q.cls[p[4]])}${p[5].length ? ' · ' + esc(ingText(i, 2)) : ''}</span></span><span class="co">${esc(p[2])}</span></button></li>`; }).join('')
       + (hits.length > LIMIT ? `<li class="more">그 밖에 ${(hits.length - LIMIT).toLocaleString()}개가 더 있습니다. 이름을 더 넣어 좁혀 보세요.</li>` : '');
   }
   const rows = (list, me) => list.map((x) => { const q = Q.p[x];
-    return `<tr class="${x === me ? 'me' : ''}"><td><a class="prod" href="#qd=${esc(q[0])}">${esc(q[1])}</a></td><td>${esc(q[2])}</td><td class="amt">${esc(q[5].length ? ingText(x, 3) : Q.cls[q[4]])}</td><td class="date">${fmtDate(q[3])}</td></tr>`; }).join('');
+    return `<tr class="${x === me ? 'me' : ''}"><td><a class="prod" href="#qd=${esc(q[0])}">${esc(shortName(q[1]))}</a></td><td>${esc(q[2])}</td><td class="amt">${esc(q[5].length ? ingText(x, 3) : Q.cls[q[4]])}</td><td class="date">${fmtDate(q[3])}</td></tr>`; }).join('');
   const table = (list, me, id) => `<div class="tbl"><table><thead><tr><th>제품명</th><th>회사</th><th>주성분</th><th>허가일</th></tr></thead><tbody${id ? ` id="${id}"` : ''}>${rows(list, me)}</tbody></table></div>`;
 
   async function showProduct(i) {
@@ -666,7 +684,8 @@ window.YAK.clampBoxes = (root) => {
     const clsAll = (byCls.get(p[4]) || []).filter((x) => x !== i).sort(byDateDesc);
     resEl.innerHTML = `
       <div class="pick">
-        <div class="capsule"><div class="a"><div class="name">${esc(p[1])}</div><div class="sub">${esc(p[2])}</div></div><div class="b" aria-label="주성분">${lines}</div></div>
+        <div class="capsule"><div class="a"><div class="name">${esc(shortName(p[1]))}</div><div class="sub">${esc(p[2])}</div></div><div class="b" aria-label="주성분">${lines}</div></div>
+        ${variants(p[1]).length > 1 ? `<div class="variants">이 허가 하나에 함께 들어 있는 제품 <b>${variants(p[1]).length}종</b> (주성분은 같고 향·색 등이 다름)<ol>${variants(p[1]).map((v) => `<li>${esc(v)}</li>`).join('')}</ol></div>` : ''}
         <div class="tags"><span class="tag">의약외품</span><span class="tag">${esc(Q.cls[p[4]])}</span>${p[3] ? `<span class="tag">허가 ${fmtDate(p[3])}</span>` : ''}</div>
         <div class="info three" id="qdinfo" aria-live="polite"></div>
       </div>
@@ -687,7 +706,7 @@ window.YAK.clampBoxes = (root) => {
       </section>`;
     const f = $('#qdf'), body = $('#qdcls');
     f.addEventListener('input', () => { const t = n(f.value); const list = t ? clsAll.filter((x) => n(Q.p[x][1] + Q.p[x][2]).includes(t)) : clsAll; body.innerHTML = rows(list.slice(0, MAX), -1) || '<tr><td colspan="4" class="empty">찾은 제품이 없습니다.</td></tr>'; });
-    document.title = `${p[1]} 의약외품 비교`;
+    document.title = `${shortName(p[1])} 의약외품 비교`;
     const box = $('#qdinfo');
     try { const r = await fetch(`data/qd-info/${shardOf(p[0])}.json?v=${encodeURIComponent(Q.updated)}`); const o = r.ok ? await r.json() : {};
       const it = o[p[0]]; if ($('#qdinfo') !== box) return;
