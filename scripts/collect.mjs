@@ -263,6 +263,43 @@ async function buildHealth(rows, stamp) {
   return p.length;
 }
 
+// ── 의약외품 ──
+const QD_BASE = process.env.QD_BASE || 'https://apis.data.go.kr/1471000/QdrgPrdtPrmsnInfoService03';
+const QD_SHARDS = 64; // 웹 화면 올리기 한도(100개)를 넘지 않게
+const qdShard = (k) => shardOf(k) % QD_SHARDS;
+async function collectQuasi(stamp) {
+  let rows;
+  try { rows = await fetchAll('getQdrgPrdtPrmsnInfoInq03', '의약외품', QD_BASE, true); }
+  catch (e) { console.warn(`의약외품 자료를 받지 못해 건너뜁니다(${e.message}). '식품의약품안전처_의약외품 제품 허가정보'를 활용신청하면 적용됩니다.`); return null; }
+  return buildQuasi(rows.map((x) => x.item || x), stamp);
+}
+async function buildQuasi(items, stamp) {
+  const ingIdx = new Map(), ing = [], clsIdx = new Map(), cls = [], p = [], info = Array.from({ length: QD_SHARDS }, () => ({}));
+  for (const it of items) {
+    const seq = pick(it, 'ITEM_SEQ'), name = squash(pick(it, 'ITEM_NAME'));
+    const st = pick(it, 'CANCEL_CODE_NAME');
+    if (!seq || !name || (st && st !== '정상') || /수출용/.test(name)) continue; // 취소·취하·폐업·수출용 제외
+    const c = pick(it, 'CLASS_NO_NAME').replace(/^\[\d+\]\s*/, '') || '기타';
+    if (!clsIdx.has(c)) { clsIdx.set(c, cls.length); cls.push(c); }
+    const ids = [];
+    for (const raw of pick(it, 'MAIN_INGR').split(/,(?![^(]*\))/)) {
+      const nm = squash(raw); if (!nm) continue;
+      const k = nm.replace(/\([^)]*\)/g, '').replace(/\s+/g, '').toLowerCase(); if (!k) continue;
+      if (!ingIdx.has(k)) { ingIdx.set(k, ing.length); ing.push(nm.replace(/\s*\(\d+\)$/, '')); }
+      if (!ids.includes(ingIdx.get(k))) ids.push(ingIdx.get(k));
+    }
+    p.push([seq, name, squash(pick(it, 'ENTP_NAME')), pick(it, 'ITEM_PERMIT_DATE').replace(/\D/g, '').slice(0, 8), clsIdx.get(c), ids]);
+    const nb = hfItems(cdata(it.NB_DOC_DATA).join('\n')).map((x) => x.text).filter((x) => x !== '없음');
+    info[qdShard(seq)][seq] = [shorten(cdata(it.EE_DOC_DATA).join(' '), 400), shorten(cdata(it.UD_DOC_DATA).join(' '), 300), shorten(nb.join(' · '), 900)];
+  }
+  await rm('data/qd-info', { recursive: true, force: true });
+  await mkdir('data/qd-info', { recursive: true });
+  await Promise.all(info.map((o, n) => writeFile(`data/qd-info/${n}.json`, JSON.stringify(o))));
+  await writeFile('data/qd.json', JSON.stringify({ v: 1, updated: stamp, cls, ing, p }));
+  console.log(`의약외품: 제품 ${p.length.toLocaleString()}개, 성분 ${ing.length.toLocaleString()}종, 분류 ${cls.length}개`);
+  return p.length;
+}
+
 function normQnt(q) {
   const s = String(q ?? '').trim().replace(/,/g, '');
   if (s === '') return '';
@@ -384,7 +421,8 @@ async function main() {
   console.log(`효능·부작용: 성분 조합 ${info.size.toLocaleString()}개`);
 
   const hfCount = await collectHealth(new Date().toISOString());
-  const out = { v: 3, updated: new Date().toISOString(), hf: !!hfCount, otcSupply: !!supplied, ing: ingList, units: unitList, p, c };
+  const qdCount = await collectQuasi(new Date().toISOString());
+  const out = { v: 3, updated: new Date().toISOString(), hf: !!hfCount, qd: !!qdCount, otcSupply: !!supplied, ing: ingList, units: unitList, p, c };
   await mkdir('data', { recursive: true });
   await writeFile('data/drugs.json', JSON.stringify(out));
   await writeFile('data/meta.json', JSON.stringify({
