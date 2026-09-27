@@ -79,6 +79,9 @@ h1{font-size:clamp(28px,5vw,40px);line-height:1.2;letter-spacing:-0.03em;font-we
 .info h3{margin:0 0 6px;font-size:15px;color:var(--green)}
 .info .box.se h3{color:var(--warn)}
 .info p{margin:0;font-size:15px;line-height:1.65}
+.info p.clamp{display:-webkit-box;-webkit-line-clamp:8;-webkit-box-orient:vertical;overflow:hidden}
+.more-btn{all:unset;cursor:pointer;margin-top:8px;font-size:14px;font-weight:700;color:var(--green);border-bottom:1px solid currentColor}
+.more-btn:focus-visible{outline:2px solid var(--green);outline-offset:2px}
 .info-src{grid-column:1/-1;color:var(--muted);font-size:13px;margin:0}
 .info-src a{color:var(--green)}
 @media (max-width:620px){ .info{grid-template-columns:1fr} }
@@ -148,6 +151,15 @@ footer p{margin:0 0 6px}
 
 <script>
 window.YAK = window.YAK || { mode: 'drug' };
+window.YAK.clampBoxes = (root) => {
+  root.querySelectorAll('.box p').forEach((p) => {
+    p.classList.add('clamp');
+    if (p.scrollHeight <= p.clientHeight + 2) { p.classList.remove('clamp'); return; }
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'more-btn'; b.textContent = '더 보기'; b.setAttribute('aria-expanded', 'false');
+    b.addEventListener('click', () => { const open = p.classList.toggle('clamp'); b.textContent = open ? '더 보기' : '접기'; b.setAttribute('aria-expanded', String(!open)); });
+    p.after(b);
+  });
+};
 (() => {
   const $ = (s) => document.querySelector(s);
   const qEl = $('#q'), statusEl = $('#status'), sugEl = $('#suggest'), resEl = $('#result');
@@ -314,6 +326,7 @@ window.YAK = window.YAK || { mode: 'drug' };
       <div class="box"><h3>효능</h3><p>${esc(eff || '요약 자료 없음')}</p></div>
       <div class="box se"><h3>주요 부작용</h3><p>${esc(se || '요약 자료 없음')}</p></div>
       <p class="info-src">${src === 1 ? '식약처 e약은요' : '식약처 허가사항'} 자료를 짧게 줄인 내용이며, 같은 성분·함량 제품의 자료를 함께 씁니다. ${link}</p>`;
+    window.YAK.clampBoxes(box);
   }
 
   function showProduct(i) {
@@ -534,7 +547,9 @@ window.YAK = window.YAK || { mode: 'drug' };
     const box = $('#hfinfo'), sh = shardOf(p[0]);
     try { const r = await fetch(`data/hf-info/${sh}.json?v=${encodeURIComponent(H.updated)}`); const o = r.ok ? await r.json() : {};
       const it = o[p[0]]; if ($('#hfinfo') !== box) return;
-      box.innerHTML = it ? `<div class="box"><h3>기능성</h3><p>${esc(it[0] || '-')}</p></div><div class="box"><h3>섭취 방법</h3><p>${esc(it[1] || '-')}</p></div><div class="box se"><h3>섭취 시 주의사항</h3><p>${esc(it[2] || '-')}</p></div><p class="info-src">식약처 건강기능식품정보를 짧게 줄인 내용입니다.</p>` : '';
+      const lines = (t) => { const x = esc(t || '-').split(' · '); return x.length > 1 ? '· ' + x.join('<br>· ') : x[0]; };
+      box.innerHTML = it ? `<div class="box"><h3>기능성</h3><p>${lines(it[0])}</p></div><div class="box"><h3>섭취 방법</h3><p>${esc(it[1] || '-')}</p></div><div class="box se"><h3>섭취 시 주의사항</h3><p>${lines(it[2])}</p></div><p class="info-src">식약처 건강기능식품정보. 원료별 주의사항을 먼저, 공통 주의사항을 뒤에 보여 줍니다.</p>` : '';
+      window.YAK.clampBoxes(box);
     } catch { box.innerHTML = ''; }
   }
   async function route() {
