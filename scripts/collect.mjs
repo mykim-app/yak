@@ -278,7 +278,7 @@ async function buildQuasi(items, stamp) {
   for (const it of items) {
     const seq = pick(it, 'ITEM_SEQ'), name = squash(pick(it, 'ITEM_NAME'));
     const st = pick(it, 'CANCEL_CODE_NAME');
-    if (!seq || !name || (st && st !== '정상') || /수출용/.test(name)) continue; // 취소·취하·폐업·수출용 제외
+    if (!seq || !name || (st && st !== '정상') || /수출용|삭제요청/.test(name)) continue; // 취소·취하·폐업·수출용·삭제요청 제외
     const c = pick(it, 'CLASS_NO_NAME').replace(/^\[\d+\]\s*/, '') || '기타';
     if (!clsIdx.has(c)) { clsIdx.set(c, cls.length); cls.push(c); }
     const ids = [];
@@ -379,6 +379,7 @@ async function main() {
     const set = comp.get(seq);
     if (!set || set.size === 0) continue;
     if (info.cancelled && !KEEP_CANCELLED) continue;
+    if (/삭제요청/.test(info.name)) continue; // 이름에 '삭제요청'이 붙은 품목은 뺀다
     const key = [...set].sort((a, b) => {
       const [ai, aq] = a.split(':'); const [bi, bq] = b.split(':');
       return (+ai - +bi) || aq.localeCompare(bq);
