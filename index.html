@@ -75,6 +75,14 @@ h1{font-size:clamp(28px,5vw,40px);line-height:1.2;letter-spacing:-0.03em;font-we
 .info-src{grid-column:1/-1;color:var(--muted);font-size:13px;margin:0}
 .info-src a{color:var(--green)}
 @media (max-width:620px){ .info{grid-template-columns:1fr} }
+.pill{margin:16px 0 0;display:flex;flex-direction:column;align-items:flex-start;gap:4px}
+.pill img{max-width:min(420px,100%);height:auto;border-radius:12px;border:1px solid var(--line);background:#fff}
+.pill figcaption,.photo td small{color:var(--muted);font-size:12px}
+.phbtn{font:inherit;font-size:13px;padding:2px 10px;border-radius:999px;border:1px solid var(--line);background:var(--card);color:var(--ink);cursor:pointer;white-space:nowrap}
+.phbtn[aria-expanded="true"]{background:var(--green-soft);border-color:var(--green)}
+.phbtn:focus-visible{outline:2px solid var(--green);outline-offset:1px}
+tr.photo td{background:var(--paper)}
+tr.photo img{max-width:min(360px,100%);height:auto;border-radius:10px;border:1px solid var(--line);background:#fff;display:block}
 section.group{margin-top:40px}
 .ghead{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;border-bottom:2px solid var(--ink);padding-bottom:8px}
 .ghead .n{font-size:40px;font-weight:800;line-height:1;letter-spacing:-0.03em;color:var(--green)}
@@ -84,6 +92,7 @@ section.group{margin-top:40px}
 .filter input{font:inherit;width:100%;max-width:320px;padding:8px 14px;border-radius:var(--radius-sm);border:1px solid var(--line);background:var(--card);color:var(--ink)}
 .filter input:focus-visible{outline:2px solid var(--green);outline-offset:1px}
 .tbl{overflow-x:auto}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
 table{width:100%;border-collapse:collapse;font-size:15px}
 th{text-align:left;font-weight:600;color:var(--muted);font-size:13px;padding:10px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
 td{padding:10px 8px;border-bottom:1px solid var(--line);vertical-align:top}
@@ -253,7 +262,8 @@ footer p{margin:0 0 6px}
       const p = D.p[i];
       return `<tr class="${i === me ? 'me' : ''}" data-name="${esc(n(p[1] + p[2]))}">
         <td><a class="prod" href="#seq=${esc(p[0])}">${esc(p[1])}</a>${i === firstIdx ? '<span class="first">가장 먼저 허가</span>' : ''}</td>
-        <td>${esc(p[2])}</td><td class="kind">${KIND[p[4]] || ''}</td><td class="date">${fmtDate(p[3])}</td></tr>`;
+        <td>${esc(p[2])}</td><td class="kind">${KIND[p[4]] || ''}</td><td class="date">${fmtDate(p[3])}</td>
+        <td>${p[6] ? `<button type="button" class="phbtn" data-img="${esc(p[6])}" data-name="${esc(p[1])}" aria-expanded="false">사진</button>` : ''}</td></tr>`;
     }).join('');
   }
   const onlyEl = $('#onlyAvail');
@@ -266,8 +276,9 @@ footer p{margin:0 0 6px}
   };
   const keep = (i) => !onlyEl.checked || avail(i);
   const hiddenNote = (all, shown) => all > shown ? `<div class="hidden-note">수출용 등 시중에서 구하기 어려운 제품 ${all - shown}개는 숨겼습니다.</div>` : '';
+  const imgUrl = (id) => `https://nedrug.mfds.go.kr/pbp/cmn/itemImageDownload/${encodeURIComponent(id)}`;
   const byDate = (a, b) => (D.p[a][3] || '99999999').localeCompare(D.p[b][3] || '99999999');
-  const tableHtml = (body) => `<div class="tbl"><table><thead><tr><th>제품명</th><th>회사</th><th class="kind">구분</th><th>허가일</th></tr></thead><tbody>${body}</tbody></table></div>`;
+  const tableHtml = (body) => `<div class="tbl"><table><thead><tr><th>제품명</th><th>회사</th><th class="kind">구분</th><th>허가일</th><th><span class="sr">사진</span></th></tr></thead><tbody>${body}</tbody></table></div>`;
 
   const SHARDS = 128;
   const shardOf = (key) => { let h = 5381; for (const ch of key) h = ((h * 33) ^ ch.charCodeAt(0)) >>> 0; return h % SHARDS; };
@@ -331,6 +342,7 @@ footer p{margin:0 0 6px}
           <div class="b" aria-label="주성분">${ingLine}</div>
         </div>
         <div class="tags">${p[4] ? `<span class="tag">${KIND[p[4]]}</span>` : ''}${p[3] ? `<span class="tag">허가 ${fmtDate(p[3])}</span>` : ''}<span class="tag">주성분 ${ings.length}종</span></div>
+        ${p[6] ? `<figure class="pill"><img src="${imgUrl(p[6])}" alt="${esc(p[1])} 낱알 사진" loading="lazy" onerror="this.closest('figure').remove()"><figcaption>낱알 사진 · 식약처 의약품안전나라</figcaption></figure>` : ''}
         <div class="info" id="info" aria-live="polite"></div>
       </div>
 
@@ -378,6 +390,16 @@ footer p{margin:0 0 6px}
     showProduct(i);
     resEl.scrollIntoView({ block: 'start', behavior: 'smooth' });
   }
+
+  resEl.addEventListener('click', (e) => {
+    const b = e.target.closest('.phbtn'); if (!b) return;
+    const tr = b.closest('tr'), next = tr.nextElementSibling;
+    if (next && next.classList.contains('photo')) { next.remove(); b.setAttribute('aria-expanded', 'false'); return; }
+    const row = document.createElement('tr'); row.className = 'photo';
+    row.innerHTML = `<td colspan="${tr.children.length}"><img src="${imgUrl(b.dataset.img)}" alt="${esc(b.dataset.name)} 낱알 사진" loading="lazy"><small>식약처 의약품안전나라</small></td>`;
+    row.querySelector('img').onerror = () => { row.querySelector('td').innerHTML = '<small>사진을 불러오지 못했습니다.</small>'; };
+    tr.after(row); b.setAttribute('aria-expanded', 'true');
+  });
 
   let timer;
   qEl.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(showSuggest, 120); });
