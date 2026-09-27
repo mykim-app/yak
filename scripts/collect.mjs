@@ -188,6 +188,56 @@ async function fetchEach(op, label, onItems, conc = 3) {
   if (skipped) console.warn(`[${label}] 받지 못한 ${skipped}건은 다음 갱신 때 다시 시도합니다.`);
 }
 
+// ── 건강기능식품 ──
+const HF_BASE = process.env.HF_BASE || 'https://apis.data.go.kr/1471000/HtfsInfoService03';
+// 기준규격 문구에서 "원료 : 표시량(20mg/1캡슐)의 80~120%" 같은 줄만 골라 [원료명, 함량]으로 만든다.
+function parseHfStandard(txt) {
+  const out = [];
+  for (let line of String(txt || '').split(/\r?\n|(?=\s[②-⑳]\s?)|(?=\s\d{1,2}\)\s)/)) {
+    line = squash(line).replace(/^(?:[①-⑳]|\(\d{1,2}\)|\d{1,2}\s*[.)]|\d{1,2}\s|[가-하]\.)\s*/, '');
+    if (!/표시량/.test(line)) continue;
+    const m = line.match(/^([^:：]+?)\s*[:：]\s*(.*)$/);
+    if (!m) continue;
+    let name = m[1].replace(/\(\s*표시량[^)]*\)?.*$/, '').replace(/\((?:mg|g|㎎|μg|㎍|%|mg\/g|CFU\/g|cfu\/g)[^)]*\)/gi, '').replace(/\([^)]*$/, '').replace(/\s*(?:의\s*)?(?:함량|함유량|총량)$/, '')
+      .replace(/^(?:[\d\-]+\)|[⑴-⒇]|[ㆍ·•\-])\s*/, '').replace(/^기능성분\s*/, '').replace(/\s*\([^)]*\)/g, ' ').replace(/\s+/g, ' ').replace(/\s*(?:의\s*)?(?:함량|함유량)$/, '').trim();
+    if (!name || name.length > 40 || /성상|대장균|세균|납|카드뮴|수은|비소|붕해|잔류|곰팡이|수분|산가|과산화물/.test(name)) continue;
+    const a = line.match(/표시량\s*(?:[(:：]\s*[:：]?)?\s*([\d.,]+\s*(?:\([^)]*\))?\s*[A-Za-z㎎㎍µμα-ω%가-힣]*)\s*(?:이상)?\s*\/\s*([^)]+?)\s*\)/);
+    const amt = a ? `${a[1]}/${a[2].split('(')[0]}`.replace(/\s+/g, '').replace(/㎎/g, 'mg').replace(/㎍|ug(?=\/)/g, 'μg') : '';
+    out.push([name, amt]);
+  }
+  return out;
+}
+const HF_SYN = { 셀레늄: '셀렌', 비타민b3: '나이아신' };
+const hfKey = (name) => { const k = name.replace(/\s+/g, '').replace(/수$/, '').replace(/와|과|및|,/g, '').toLowerCase(); return HF_SYN[k] || k; };
+
+async function collectHealth(stamp) {
+  let rows;
+  try { rows = await fetchAll('getHtfsItem01', '건강기능식품', HF_BASE, true); }
+  catch (e) { console.warn(`건강기능식품 자료를 받지 못해 건너뜁니다(${e.message}). '식품의약품안전처_건강기능식품정보'를 활용신청하면 적용됩니다.`); return null; }
+  return buildHealth(rows.map((x) => x.item || x).map((it) => [pick(it, 'STTEMNT_NO'), pick(it, 'PRDUCT'), pick(it, 'ENTRPS'),
+    pick(it, 'REGIST_DT'), pick(it, 'SRV_USE'), pick(it, 'MAIN_FNCTN'), pick(it, 'INTAKE_HINT1'), pick(it, 'BASE_STANDARD')]), stamp);
+}
+async function buildHealth(rows, stamp) {
+  const ingIdx = new Map(), ing = [], p = [], info = Array.from({ length: SHARDS }, () => ({}));
+  for (const [id, name, company, date, use, fn, hint, std] of rows) {
+    if (!id || !name || /원료로\s*사용/.test(use)) continue; // 업체용 원료는 뺀다
+    const parts = [];
+    for (const [nm, amt] of parseHfStandard(std)) {
+      const k = hfKey(nm);
+      if (!ingIdx.has(k)) { ingIdx.set(k, ing.length); ing.push(nm); }
+      if (!parts.some((x) => x[0] === ingIdx.get(k))) parts.push([ingIdx.get(k), amt]);
+    }
+    p.push([id, squash(name), squash(company), String(date).slice(0, 8), parts.map((x) => x[0]), parts.map((x) => x[1])]);
+    info[shardOf(id)][id] = [shorten(fn, 160), shorten(use, 120), shorten(String(hint).replace(/\s*\d+[.)]\s*/g, ' · ').replace(/^\s*·\s*/, ''), 200)];
+  }
+  await rm('data/hf-info', { recursive: true, force: true });
+  await mkdir('data/hf-info', { recursive: true });
+  await Promise.all(info.map((o, n) => writeFile(`data/hf-info/${n}.json`, JSON.stringify(o))));
+  await writeFile('data/hf.json', JSON.stringify({ v: 1, updated: stamp, ing, p }));
+  console.log(`건강기능식품: 제품 ${p.length.toLocaleString()}개, 기능성 원료 ${ing.length.toLocaleString()}종`);
+  return p.length;
+}
+
 function normQnt(q) {
   const s = String(q ?? '').trim().replace(/,/g, '');
   if (s === '') return '';
@@ -308,7 +358,8 @@ async function main() {
   await Promise.all(shards.map((o, n) => writeFile(`data/info/${n}.json`, JSON.stringify(o))));
   console.log(`효능·부작용: 성분 조합 ${info.size.toLocaleString()}개`);
 
-  const out = { v: 3, updated: new Date().toISOString(), otcSupply: !!supplied, ing: ingList, units: unitList, p, c };
+  const hfCount = await collectHealth(new Date().toISOString());
+  const out = { v: 3, updated: new Date().toISOString(), hf: !!hfCount, otcSupply: !!supplied, ing: ingList, units: unitList, p, c };
   await mkdir('data', { recursive: true });
   await writeFile('data/drugs.json', JSON.stringify(out));
   await writeFile('data/meta.json', JSON.stringify({
