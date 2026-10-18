@@ -1,10 +1,10 @@
 {
-  "updated": "2026-10-11T22:11:10.117Z",
-  "products": 34652,
-  "ingredients": 5500,
-  "sourceList": 42713,
-  "sourceIngredientRows": 125684,
-  "cancelledExcluded": 7547,
-  "otcSupplied": 4729,
-  "infoCombos": 9450
+  "updated": "2026-10-18T20:52:06.974Z",
+  "products": 34651,
+  "ingredients": 5503,
+  "sourceList": 42704,
+  "sourceIngredientRows": 125706,
+  "cancelledExcluded": 7539,
+  "otcSupplied": 4726,
+  "infoCombos": 9453
 }
